@@ -1,0 +1,8 @@
+{
+  "projects": {
+    "default": "tcgclinicmanagementsyste-6b042",
+    "clinic": "tcgclinicmanagementsyste-6b042"
+  },
+  "targets": {},
+  "etags": {}
+}
