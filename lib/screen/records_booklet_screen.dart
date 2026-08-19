@@ -25,6 +25,12 @@ class RecordsBookletState extends State<RecordsBooklet> {
   static const Color kTextSub   = Color(0xFF64748B);
   static const Color kDanger    = Color(0xFFEF4444);
 
+  // Same category accent colors used on the Patients page, so a category
+  // reads the same way across the whole app.
+  static const Color kStudentColor = Color(0xFF2563EB);
+  static const Color kFacultyColor = Color(0xFFD97706);
+  static const Color kStaffColor   = Color(0xFF7C3AED);
+
   // Simulated signed-in user — stamped onto records on update, and shown
   // in the audit trail (mirrors `_preparedBy` on the Reports page).
   static const String _currentUser = "Anna Gonzaga";
@@ -167,10 +173,10 @@ class RecordsBookletState extends State<RecordsBooklet> {
 
   void _showDetailDialog(Map<String, String> record) {
     final Color typeColor = record["type"] == "Student"
-        ? const Color(0xFF1D4ED8)
+        ? kStudentColor
         : record["type"] == "Faculty"
-            ? const Color(0xFF6D28D9)
-            : const Color(0xFF15803D);
+            ? kFacultyColor
+            : kStaffColor;
 
     showDialog(
       context: context,
@@ -760,7 +766,7 @@ class RecordsBookletState extends State<RecordsBooklet> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _buildHeaderRow(summary),
-                const SizedBox(height: 22),
+                const SizedBox(height: 20),
                 _buildSearchAndFilters(),
                 const SizedBox(height: 16),
                 _buildTabsBar(),
@@ -783,12 +789,13 @@ class RecordsBookletState extends State<RecordsBooklet> {
     );
   }
 
-  // ── HEADER: title on the left, big counts pinned to the right ─────────
-  // (Matches the old app-bar chip position, just scaled up for readability.)
+  // ── HEADER: title on the left, compact counts pinned to the right ─────
+  // Was previously a row of large stat cards; now uses the same small
+  // pill-chip style as the Patients page so it doesn't dominate the header.
 
   Widget _buildHeaderRow(Map<String, int> summary) {
     return LayoutBuilder(builder: (context, constraints) {
-      final bool isNarrow = constraints.maxWidth < 760;
+      final bool isNarrow = constraints.maxWidth < 700;
 
       final titleBlock = Row(
         crossAxisAlignment: CrossAxisAlignment.center,
@@ -819,12 +826,12 @@ class RecordsBookletState extends State<RecordsBooklet> {
         ],
       );
 
-      final chips = _buildBigCountChips(summary);
+      final chips = _buildCategorySummary(summary);
 
       if (isNarrow) {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
-          children: [titleBlock, const SizedBox(height: 16), chips],
+          children: [titleBlock, const SizedBox(height: 12), chips],
         );
       }
       return Row(
@@ -838,42 +845,37 @@ class RecordsBookletState extends State<RecordsBooklet> {
     });
   }
 
-  Widget _buildBigCountChips(Map<String, int> summary) {
-    final metrics = <Map<String, dynamic>>[
-      {"label": "Total",    "value": summary["all"]!,     "color": kPrimary,               "icon": Icons.groups_rounded},
-      {"label": "Students", "value": summary["student"]!, "color": const Color(0xFF2563EB), "icon": Icons.school_outlined},
-      {"label": "Faculty",  "value": summary["faculty"]!, "color": const Color(0xFFD97706), "icon": Icons.co_present_outlined},
-      {"label": "Staff",    "value": summary["staff"]!,   "color": const Color(0xFF7C3AED), "icon": Icons.badge_outlined},
-    ];
-
+  Widget _buildCategorySummary(Map<String, int> summary) {
     return Wrap(
       alignment: WrapAlignment.end,
-      spacing: 12,
-      runSpacing: 12,
-      children: metrics.map((m) {
-        final color = m["color"] as Color;
-        return Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-          decoration: BoxDecoration(
-            color: color.withOpacity(0.08),
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: color.withOpacity(0.25)),
-          ),
-          child: Row(mainAxisSize: MainAxisSize.min, children: [
-            Icon(m["icon"] as IconData, size: 22, color: color),
-            const SizedBox(width: 10),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text("${m["value"]}",
-                    style: TextStyle(fontSize: 26, fontWeight: FontWeight.w900, color: color, height: 1.0)),
-                Text(m["label"] as String,
-                    style: const TextStyle(fontSize: 12.5, color: kTextSub, fontWeight: FontWeight.w600)),
-              ],
-            ),
-          ]),
-        );
-      }).toList(),
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        _summaryChip('All', summary['all']!, kPrimary, Icons.groups_rounded),
+        _summaryChip('Students', summary['student']!, kStudentColor, Icons.school_outlined),
+        _summaryChip('Faculty', summary['faculty']!, kFacultyColor, Icons.co_present_outlined),
+        _summaryChip('Staff', summary['staff']!, kStaffColor, Icons.badge_outlined),
+      ],
+    );
+  }
+
+  // Compact — icon, count, label all on one line. Same size as the chips
+  // on the Patients page, deliberately smaller than the old stat cards.
+  Widget _summaryChip(String label, int count, Color color, IconData icon) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withOpacity(0.2)),
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(icon, size: 14, color: color),
+        const SizedBox(width: 6),
+        Text('$count', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: color)),
+        const SizedBox(width: 4),
+        Text(label, style: TextStyle(fontSize: 13, color: color, fontWeight: FontWeight.w600)),
+      ]),
     );
   }
 
@@ -1044,11 +1046,11 @@ class RecordsBookletState extends State<RecordsBooklet> {
     Color bg, fg;
     switch (t) {
       case "Student":
-        bg = const Color(0xFFDBEAFE); fg = const Color(0xFF1D4ED8); break;
+        bg = const Color(0xFFDBEAFE); fg = kStudentColor; break;
       case "Faculty":
-        bg = const Color(0xFFEDE9FE); fg = const Color(0xFF6D28D9); break;
+        bg = const Color(0xFFFEF3C7); fg = kFacultyColor; break;
       default:
-        bg = const Color(0xFFDCFCE7); fg = const Color(0xFF15803D);
+        bg = const Color(0xFFEDE9FE); fg = kStaffColor;
     }
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
