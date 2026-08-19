@@ -14,32 +14,44 @@ class RecordsBooklet extends StatefulWidget {
 }
 
 class RecordsBookletState extends State<RecordsBooklet> {
-
+  // ── DESIGN TOKENS — matched to the Reports & Patients pages ───────────
   static const Color kPrimary   = Color(0xFF008080);
   static const Color kPrimaryDk = Color(0xFF0F766E);
+  static const Color kBg        = Color(0xFFF1F5F9);
+  static const Color kCard      = Colors.white;
+  static const Color kBorder    = Color(0xFFE2E8F0);
   static const Color kTextMain  = Color(0xFF0F172A);
+  static const Color kTextDark  = Color(0xFF1E293B);
   static const Color kTextSub   = Color(0xFF64748B);
   static const Color kDanger    = Color(0xFFEF4444);
-  static const Color kBorder    = Color(0xFFE2E8F0);
 
+  // Simulated signed-in user — stamped onto records on update, and shown
+  // in the audit trail (mirrors `_preparedBy` on the Reports page).
+  static const String _currentUser = "Anna Gonzaga";
+
+  // "Today" | "All" | "Custom" (single date) | "Range" (date range)
   String selectedFilter = "Today";
   DateTime selectedDate = DateTime(2026, 5, 2);
+  DateTimeRange? selectedRange;
   String searchQuery = "";
 
   static const String _simulatedToday = "2026-05-02";
 
+  // Every record carries a small audit trail alongside the clinical
+  // fields: createdBy/At is stamped at intake, updatedBy/At changes
+  // whenever a record is edited.
   final List<Map<String, String>> _allRecords = [
-    {"date":"2026-06-02","time":"02:15 PM","name":"Cresa Delacruz S.","id":"234567","type":"Student","dept":"BSCS","year":"2nd Year","complaint":"Sore Throat","medicine":"Amoxicillin","qty":"1"},
-    {"date":"2026-05-02","time":"08:15 AM","name":"Cresa Delacruz S.","id":"234567","type":"Student","dept":"BSCS","year":"2nd Year","complaint":"Headache and Dizziness","medicine":"Paracetamol","qty":"1"},
-    {"date":"2026-05-02","time":"08:40 AM","name":"John A. Doe","id":"234889","type":"Student","dept":"BSIT","year":"3rd Year","complaint":"Fever","medicine":"Biogesic","qty":"2"},
-    {"date":"2024-05-02","time":"09:05 AM","name":"John A. Doe","id":"234889","type":"Student","dept":"BSIT","year":"3rd Year","complaint":"Fever","medicine":"Biogesic","qty":"3"},
-    {"date":"2023-05-02","time":"10:05 AM","name":"John A. Doe","id":"234889","type":"Student","dept":"BSIT","year":"3rd Year","complaint":"Fever","medicine":"Biogesic","qty":"5"},
-    {"date":"2026-05-02","time":"08:15 AM","name":"Cresa Delacruz S.","id":"234567","type":"Student","dept":"BSCS","year":"2nd Year","complaint":"Headache and Dizziness","medicine":"Paracetamol","qty":"1"},
-    {"date":"2026-05-02","time":"08:30 AM","name":"Jane Smith","id":"F001","type":"Faculty","dept":"ICS","year":"Dean","complaint":"Migraine","medicine":"Paracetamol","qty":"2"},
-    {"date":"2026-05-02","time":"09:15 AM","name":"Prof. Ramon Garcia","id":"F002","type":"Faculty","dept":"ICS","year":"Instructor","complaint":"Headache","medicine":"Paracetamol","qty":"1"},
-    {"date":"2026-06-02","time":"10:10 AM","name":"Jane Smith","id":"F001","type":"Faculty","dept":"ICS","year":"Dean","complaint":"Fever","medicine":"Paracetamol","qty":"1"},
-    {"date":"2026-05-02","time":"08:00 AM","name":"Mark Lee","id":"S001","type":"Staff","dept":"Registrar","year":"???","complaint":"Headache","medicine":"Paracetamol","qty":"1"},
-    {"date":"2026-05-02","time":"11:50 AM","name":"Rosa Navarro","id":"S002","type":"Staff","dept":"Library","year":"Librarian","complaint":"Fever","medicine":"Biogesic","qty":"2"},
+    {"date":"2026-06-02","time":"02:15 PM","name":"Cresa Delacruz S.","id":"234567","type":"Student","dept":"BSCS","year":"2nd Year","complaint":"Sore Throat","medicine":"Amoxicillin","qty":"1","createdBy":"Nurse Reyes","createdAt":"2026-06-02 02:15 PM","updatedBy":"—","updatedAt":"—"},
+    {"date":"2026-05-02","time":"08:15 AM","name":"Cresa Delacruz S.","id":"234567","type":"Student","dept":"BSCS","year":"2nd Year","complaint":"Headache and Dizziness","medicine":"Paracetamol","qty":"1","createdBy":"Nurse Reyes","createdAt":"2026-05-02 08:15 AM","updatedBy":"—","updatedAt":"—"},
+    {"date":"2026-05-02","time":"08:40 AM","name":"John A. Doe","id":"234889","type":"Student","dept":"BSIT","year":"3rd Year","complaint":"Fever","medicine":"Biogesic","qty":"2","createdBy":"Nurse Reyes","createdAt":"2026-05-02 08:40 AM","updatedBy":"—","updatedAt":"—"},
+    {"date":"2024-05-02","time":"09:05 AM","name":"John A. Doe","id":"234889","type":"Student","dept":"BSIT","year":"3rd Year","complaint":"Fever","medicine":"Biogesic","qty":"3","createdBy":"Nurse Reyes","createdAt":"2024-05-02 09:05 AM","updatedBy":"—","updatedAt":"—"},
+    {"date":"2023-05-02","time":"10:05 AM","name":"John A. Doe","id":"234889","type":"Student","dept":"BSIT","year":"3rd Year","complaint":"Fever","medicine":"Biogesic","qty":"5","createdBy":"Nurse Reyes","createdAt":"2023-05-02 10:05 AM","updatedBy":"—","updatedAt":"—"},
+    {"date":"2026-05-02","time":"08:15 AM","name":"Cresa Delacruz S.","id":"234567","type":"Student","dept":"BSCS","year":"2nd Year","complaint":"Headache and Dizziness","medicine":"Paracetamol","qty":"1","createdBy":"Nurse Reyes","createdAt":"2026-05-02 08:15 AM","updatedBy":"—","updatedAt":"—"},
+    {"date":"2026-05-02","time":"08:30 AM","name":"Jane Smith","id":"F001","type":"Faculty","dept":"ICS","year":"Dean","complaint":"Migraine","medicine":"Paracetamol","qty":"2","createdBy":"Nurse Reyes","createdAt":"2026-05-02 08:30 AM","updatedBy":"—","updatedAt":"—"},
+    {"date":"2026-05-02","time":"09:15 AM","name":"Prof. Ramon Garcia","id":"F002","type":"Faculty","dept":"ICS","year":"Instructor","complaint":"Headache","medicine":"Paracetamol","qty":"1","createdBy":"Nurse Reyes","createdAt":"2026-05-02 09:15 AM","updatedBy":"—","updatedAt":"—"},
+    {"date":"2026-06-02","time":"10:10 AM","name":"Jane Smith","id":"F001","type":"Faculty","dept":"ICS","year":"Dean","complaint":"Fever","medicine":"Paracetamol","qty":"1","createdBy":"Nurse Reyes","createdAt":"2026-06-02 10:10 AM","updatedBy":"—","updatedAt":"—"},
+    {"date":"2026-05-02","time":"08:00 AM","name":"Mark Lee","id":"S001","type":"Staff","dept":"Registrar","year":"???","complaint":"Headache","medicine":"Paracetamol","qty":"1","createdBy":"Nurse Reyes","createdAt":"2026-05-02 08:00 AM","updatedBy":"—","updatedAt":"—"},
+    {"date":"2026-05-02","time":"11:50 AM","name":"Rosa Navarro","id":"S002","type":"Staff","dept":"Library","year":"Librarian","complaint":"Fever","medicine":"Biogesic","qty":"2","createdBy":"Nurse Reyes","createdAt":"2026-05-02 11:50 AM","updatedBy":"—","updatedAt":"—"},
   ];
 
   // ── FILTER ────────────────────────────────────────────────────────────
@@ -58,6 +70,15 @@ class RecordsBookletState extends State<RecordsBooklet> {
     } else if (selectedFilter == "Custom") {
       final String picked = DateFormat("yyyy-MM-dd").format(selectedDate);
       filtered = filtered.where((e) => e["date"] == picked).toList();
+    } else if (selectedFilter == "Range" && selectedRange != null) {
+      final start = DateTime(selectedRange!.start.year, selectedRange!.start.month, selectedRange!.start.day);
+      final end   = DateTime(selectedRange!.end.year, selectedRange!.end.month, selectedRange!.end.day);
+      filtered = filtered.where((e) {
+        final d = DateTime.tryParse(e["date"]!);
+        if (d == null) return false;
+        final dOnly = DateTime(d.year, d.month, d.day);
+        return !dOnly.isBefore(start) && !dOnly.isAfter(end);
+      }).toList();
     }
     return filtered;
   }
@@ -72,7 +93,7 @@ class RecordsBookletState extends State<RecordsBooklet> {
     };
   }
 
-  // ── DATE PICKER ───────────────────────────────────────────────────────
+  // ── DATE / RANGE PICKERS ─────────────────────────────────────────────
 
   Future<void> _pickDate() async {
     final DateTime? picked = await showDatePicker(
@@ -97,6 +118,247 @@ class RecordsBookletState extends State<RecordsBooklet> {
         selectedFilter = "Custom";
       });
     }
+  }
+
+  // Compact (non-fullscreen) range picker — same pattern as the Reports page.
+  Future<void> _pickRange() async {
+    final range = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2100),
+      initialDateRange: selectedRange,
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: Theme.of(context).colorScheme.copyWith(primary: kPrimary),
+          ),
+          child: Dialog(
+            insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 420, maxHeight: 520),
+              child: child,
+            ),
+          ),
+        );
+      },
+    );
+    if (range != null) {
+      setState(() {
+        selectedRange = range;
+        selectedFilter = "Range";
+      });
+    }
+  }
+
+  // ── FORMATTING HELPERS ───────────────────────────────────────────────
+
+  String _fmtDisplayDate(String yyyyMmDd) {
+    try {
+      final d = DateFormat("yyyy-MM-dd").parse(yyyyMmDd);
+      return DateFormat("MMM d, yyyy").format(d);
+    } catch (_) {
+      return yyyyMmDd;
+    }
+  }
+
+  String _fmtShort(DateTime d) => DateFormat("MMM d, yyyy").format(d);
+
+  // ── ROW DETAIL DIALOG ────────────────────────────────────────────────
+
+  void _showDetailDialog(Map<String, String> record) {
+    final Color typeColor = record["type"] == "Student"
+        ? const Color(0xFF1D4ED8)
+        : record["type"] == "Faculty"
+            ? const Color(0xFF6D28D9)
+            : const Color(0xFF15803D);
+
+    showDialog(
+      context: context,
+      builder: (ctx) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        backgroundColor: kCard,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 480, maxHeight: 640),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Header banner
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.fromLTRB(24, 22, 16, 20),
+                decoration: BoxDecoration(
+                  color: kPrimary.withOpacity(0.06),
+                  borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      width: 46, height: 46,
+                      decoration: BoxDecoration(
+                        color: kPrimary,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Icon(Icons.receipt_long_outlined, color: Colors.white, size: 22),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(record["name"]!,
+                              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: kTextMain),
+                              overflow: TextOverflow.ellipsis),
+                          const SizedBox(height: 5),
+                          Row(children: [
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+                              decoration: BoxDecoration(
+                                color: typeColor.withOpacity(0.12),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Text(record["type"]!,
+                                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: typeColor)),
+                            ),
+                            const SizedBox(width: 8),
+                            Text(record["id"]!, style: const TextStyle(fontSize: 13, color: kTextSub)),
+                          ]),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      icon: const Icon(Icons.close_rounded, color: kTextSub),
+                      iconSize: 20,
+                    ),
+                  ],
+                ),
+              ),
+              Flexible(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(24, 20, 24, 8),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _detailIconRow(Icons.business_outlined, "Dept / Institute", record["dept"]!),
+                      _detailIconRow(Icons.school_outlined, "Year / Position", record["year"]!),
+                      _detailIconRow(Icons.sick_outlined, "Complaint", record["complaint"]!),
+                      _detailIconRow(Icons.medication_outlined, "Medicine Given", "${record["medicine"]} (Qty: ${record["qty"]})"),
+                      _detailIconRow(Icons.event_outlined, "Date & Time", "${_fmtDisplayDate(record["date"]!)}, ${record["time"]}"),
+                      const SizedBox(height: 8),
+                      const Divider(color: kBorder),
+                      const SizedBox(height: 12),
+                      const Text("AUDIT TRAIL",
+                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: kPrimary, letterSpacing: 0.8)),
+                      const SizedBox(height: 10),
+                      _auditRow(Icons.add_circle_outline, "Created", record["createdBy"]!, record["createdAt"]!),
+                      _auditRow(Icons.edit_outlined, "Last Updated", record["updatedBy"]!, record["updatedAt"]!),
+                    ],
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(24, 8, 24, 22),
+                child: Row(children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () {
+                        Navigator.pop(ctx);
+                        _showDeleteConfirmDialog(record);
+                      },
+                      icon: const Icon(Icons.delete_outline_rounded, size: 16, color: kDanger),
+                      label: const Text("Delete", style: TextStyle(color: kDanger)),
+                      style: OutlinedButton.styleFrom(
+                        side: const BorderSide(color: kBorder),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        padding: const EdgeInsets.symmetric(vertical: 13),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: () {
+                        Navigator.pop(ctx);
+                        _showEditDialog(record);
+                      },
+                      icon: const Icon(Icons.edit_outlined, size: 16),
+                      label: const Text("Edit"),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: kPrimary,
+                        foregroundColor: Colors.white,
+                        elevation: 0,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        padding: const EdgeInsets.symmetric(vertical: 13),
+                      ),
+                    ),
+                  ),
+                ]),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _detailIconRow(IconData icon, String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 34, height: 34,
+            margin: const EdgeInsets.only(top: 2),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF1F5F9),
+              borderRadius: BorderRadius.circular(9),
+            ),
+            child: Icon(icon, size: 16, color: kTextSub),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(label, style: const TextStyle(fontSize: 12, color: kTextSub, fontWeight: FontWeight.w600)),
+                const SizedBox(height: 2),
+                Text(value, style: const TextStyle(fontSize: 15.5, color: kTextMain, fontWeight: FontWeight.w600)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _auditRow(IconData icon, String label, String by, String at) {
+    final bool isSet = by != "—";
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: kBorder),
+      ),
+      child: Row(children: [
+        Icon(icon, size: 16, color: isSet ? kPrimary : kTextSub),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(label, style: const TextStyle(fontSize: 11, color: kTextSub, fontWeight: FontWeight.w700)),
+              Text(isSet ? "$by · $at" : "Not yet updated",
+                  style: TextStyle(fontSize: 13, color: isSet ? kTextMain : kTextSub, fontWeight: FontWeight.w500)),
+            ],
+          ),
+        ),
+      ]),
+    );
   }
 
   // ── EDIT DIALOG ───────────────────────────────────────────────────────
@@ -178,152 +440,82 @@ class RecordsBookletState extends State<RecordsBooklet> {
 
   // ── UPDATE CONFIRMATION ───────────────────────────────────────────────
 
-void _showUpdateConfirmDialog(
-  Map<String, String> record,
-  Map<String, TextEditingController> controllers,
-) {
-  showDialog(
-    context: context,
-    builder: (_) => Dialog(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      backgroundColor: Colors.white,
-      child: SizedBox(
-        width: 300,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Container(
-              width: 48, height: 48,
-              decoration: BoxDecoration(
-                color: kPrimary.withOpacity(0.1),
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(Icons.save_outlined, color: kPrimary, size: 22),
-            ),
-            const SizedBox(height: 12),
-            const Text("Update Record",
-                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: kTextMain)),
-            const SizedBox(height: 6),
-            const Text("Are you sure you want to save changes to this record?",
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 12, color: kTextSub, height: 1.5)),
-            const SizedBox(height: 20),
-            Row(children: [
-              Expanded(child: OutlinedButton(
-                onPressed: () {
-                  Navigator.pop(context);
-                  _showEditDialogWithControllers(record, controllers);
-                },
-                style: OutlinedButton.styleFrom(
-                  side: const BorderSide(color: kBorder),
-                  foregroundColor: kTextSub,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                  padding: const EdgeInsets.symmetric(vertical: 10),
-                ),
-                child: const Text("Cancel", style: TextStyle(fontSize: 12)),
-              )),
-              const SizedBox(width: 10),
-              Expanded(child: ElevatedButton(
-                onPressed: () {
-                  setState(() {
-                    record["complaint"] = controllers["complaint"]!.text;
-                    record["medicine"]  = controllers["medicine"]!.text;
-                    record["qty"]       = controllers["qty"]!.text;
-                  });
-                  Navigator.pop(context);
-                  _showSuccess("Record updated successfully.");
-                },
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: kPrimary,
-                  foregroundColor: Colors.white,
-                  elevation: 0,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                  padding: const EdgeInsets.symmetric(vertical: 10),
-                ),
-                child: const Text("Update",
-                    style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12)),
-              )),
-            ]),
-          ]),
-        ),
-      ),
-    ),
-  );
-}
-
-  void _showEditDialogWithControllers(
+  void _showUpdateConfirmDialog(
     Map<String, String> record,
     Map<String, TextEditingController> controllers,
   ) {
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+      builder: (_) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         backgroundColor: Colors.white,
-        title: Row(children: [
-          Container(
-            width: 36, height: 36,
-            decoration: BoxDecoration(
-              color: kPrimary.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: const Icon(Icons.edit_outlined, color: kPrimary, size: 18),
-          ),
-          const SizedBox(width: 10),
-          const Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text("Edit Record",
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: kTextMain)),
-            Text("Update visit details",
-                style: TextStyle(fontSize: 11, color: kTextSub, fontWeight: FontWeight.normal)),
-          ]),
-        ]),
-        content: SizedBox(
-          width: 420,
-          child: SingleChildScrollView(
+        child: SizedBox(
+          width: 300,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
             child: Column(mainAxisSize: MainAxisSize.min, children: [
-              _readOnlyField("Full Name",       record["name"]!,  Icons.person_outline),
-              _readOnlyField("ID",              record["id"]!,    Icons.badge_outlined),
-              _readOnlyField("Dept / Institute",record["dept"]!,  Icons.business_outlined),
-              _readOnlyField("Year / Position", record["year"]!,  Icons.school_outlined),
-              const Divider(height: 20, color: kBorder),
-              _editField(controllers["complaint"]!, "Complaint", Icons.sick_outlined),
-              _editField(controllers["medicine"]!,  "Medicine",  Icons.medication_outlined),
-              _editField(controllers["qty"]!,        "Qty",       Icons.numbers_outlined),
+              Container(
+                width: 48, height: 48,
+                decoration: BoxDecoration(
+                  color: kPrimary.withOpacity(0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.save_outlined, color: kPrimary, size: 22),
+              ),
+              const SizedBox(height: 12),
+              const Text("Update Record",
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: kTextMain)),
+              const SizedBox(height: 6),
+              const Text("Are you sure you want to save changes to this record?",
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 12, color: kTextSub, height: 1.5)),
+              const SizedBox(height: 20),
+              Row(children: [
+                Expanded(child: OutlinedButton(
+                  onPressed: () {
+                    Navigator.pop(context);
+                    _showEditDialog(record);
+                  },
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: kBorder),
+                    foregroundColor: kTextSub,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                  ),
+                  child: const Text("Cancel", style: TextStyle(fontSize: 12)),
+                )),
+                const SizedBox(width: 10),
+                Expanded(child: ElevatedButton(
+                  onPressed: () {
+                    setState(() {
+                      record["complaint"] = controllers["complaint"]!.text;
+                      record["medicine"]  = controllers["medicine"]!.text;
+                      record["qty"]       = controllers["qty"]!.text;
+                      record["updatedBy"] = _currentUser;
+                      record["updatedAt"] = DateFormat("yyyy-MM-dd hh:mm a").format(DateTime.now());
+                    });
+                    Navigator.pop(context);
+                    _showSuccess("Record updated successfully.");
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: kPrimary,
+                    foregroundColor: Colors.white,
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                  ),
+                  child: const Text("Update",
+                      style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12)),
+                )),
+              ]),
             ]),
           ),
         ),
-        actions: [
-          OutlinedButton(
-            onPressed: () => Navigator.pop(ctx),
-            style: OutlinedButton.styleFrom(
-              side: const BorderSide(color: kBorder),
-              foregroundColor: kTextSub,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 11),
-            ),
-            child: const Text("Cancel"),
-          ),
-          ElevatedButton.icon(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: kPrimary,
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-              elevation: 0,
-              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 11),
-            ),
-            icon: const Icon(Icons.save_outlined, size: 15),
-            label: const Text("Update", style: TextStyle(fontWeight: FontWeight.w600)),
-            onPressed: () {
-              Navigator.pop(ctx);
-              _showUpdateConfirmDialog(record, controllers);
-            },
-          ),
-        ],
       ),
     );
   }
 
-  // ── READ-ONLY FIELD ───────────────────────────────────────────────────
+  // ── READ-ONLY / EDIT FIELDS ──────────────────────────────────────────
 
   Widget _readOnlyField(String label, String value, IconData icon) {
     return Padding(
@@ -394,80 +586,81 @@ void _showUpdateConfirmDialog(
 
   // ── DELETE CONFIRMATION ───────────────────────────────────────────────
 
-void _showDeleteConfirmDialog(Map<String, String> e) {
-  showDialog(
-    context: context,
-    builder: (_) => Dialog(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      backgroundColor: Colors.white,
-      child: SizedBox(
-        width: 300,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Container(
-              width: 48, height: 48,
-              decoration: BoxDecoration(
-                color: kDanger.withOpacity(0.1),
-                shape: BoxShape.circle,
+  void _showDeleteConfirmDialog(Map<String, String> e) {
+    showDialog(
+      context: context,
+      builder: (_) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        backgroundColor: Colors.white,
+        child: SizedBox(
+          width: 300,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Container(
+                width: 48, height: 48,
+                decoration: BoxDecoration(
+                  color: kDanger.withOpacity(0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.delete_outline_rounded, color: kDanger, size: 22),
               ),
-              child: const Icon(Icons.delete_outline_rounded, color: kDanger, size: 22),
-            ),
-            const SizedBox(height: 12),
-            const Text("Delete Record",
-                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: kTextMain)),
-            const SizedBox(height: 6),
-            const Text("Are you sure you want to delete this record?",
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 12, color: kTextSub, height: 1.5)),
-            const SizedBox(height: 20),
-            Row(children: [
-              Expanded(child: OutlinedButton(
-                onPressed: () => Navigator.pop(context),
-                style: OutlinedButton.styleFrom(
-                  side: const BorderSide(color: kBorder),
-                  foregroundColor: kTextSub,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                  padding: const EdgeInsets.symmetric(vertical: 10),
-                ),
-                child: const Text("Cancel", style: TextStyle(fontSize: 12)),
-              )),
-              const SizedBox(width: 10),
-              Expanded(child: ElevatedButton(
-                onPressed: () {
-                  setState(() => _allRecords.remove(e));
-                  Navigator.pop(context);
-                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+              const SizedBox(height: 12),
+              const Text("Delete Record",
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: kTextMain)),
+              const SizedBox(height: 6),
+              const Text("Are you sure you want to delete this record?",
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 12, color: kTextSub, height: 1.5)),
+              const SizedBox(height: 20),
+              Row(children: [
+                Expanded(child: OutlinedButton(
+                  onPressed: () => Navigator.pop(context),
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: kBorder),
+                    foregroundColor: kTextSub,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                  ),
+                  child: const Text("Cancel", style: TextStyle(fontSize: 12)),
+                )),
+                const SizedBox(width: 10),
+                Expanded(child: ElevatedButton(
+                  onPressed: () {
+                    setState(() => _allRecords.remove(e));
+                    Navigator.pop(context);
+                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                      backgroundColor: kDanger,
+                      behavior: SnackBarBehavior.floating,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      content: const Row(children: [
+                        Icon(Icons.check_circle_outline, color: Colors.white, size: 18),
+                        SizedBox(width: 10),
+                        Text("Record deleted.", style: TextStyle(color: Colors.white)),
+                      ]),
+                      duration: const Duration(seconds: 2),
+                    ));
+                  },
+                  style: ElevatedButton.styleFrom(
                     backgroundColor: kDanger,
-                    behavior: SnackBarBehavior.floating,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                    content: const Row(children: [
-                      Icon(Icons.check_circle_outline, color: Colors.white, size: 18),
-                      SizedBox(width: 10),
-                      Text("Record deleted.", style: TextStyle(color: Colors.white)),
-                    ]),
-                    duration: const Duration(seconds: 2),
-                  ));
-                },
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: kDanger,
-                  foregroundColor: Colors.white,
-                  elevation: 0,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                  padding: const EdgeInsets.symmetric(vertical: 10),
-                ),
-                child: const Text("Delete",
-                    style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12)),
-              )),
+                    foregroundColor: Colors.white,
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                  ),
+                  child: const Text("Delete",
+                      style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12)),
+                )),
+              ]),
             ]),
-          ]),
+          ),
         ),
       ),
-    ),
-  );
-}
+    );
+  }
 
-  // ── PRINT ─────────────────────────────────────────────────────────────
+  // ── PRINT (Today / single date / date range / all — whatever is
+  //    currently selected/filtered on screen) ─────────────────────────
 
   Future<void> _printRecords() async {
     final doc = pw.Document();
@@ -476,11 +669,22 @@ void _showDeleteConfirmDialog(Map<String, String> e) {
     final headers = ["ID", "Name", "Type", "Dept", "Year/Pos", "Complaint", "Medicine", "Qty", "Date", "Time"];
     final tableData = records.map((e) => [e["id"]!,e["name"]!,e["type"]!,e["dept"]!,e["year"]!,e["complaint"]!,e["medicine"]!,e["qty"]!,e["date"]!,e["time"]!]).toList();
 
-    String filterLabel = selectedFilter == "Today"
-        ? "Today (${DateFormat('MMMM d, yyyy').format(DateTime(2026,5,2))})"
-        : selectedFilter == "Custom"
-            ? DateFormat("MMMM d, yyyy").format(selectedDate)
-            : "All Records";
+    String filterLabel;
+    switch (selectedFilter) {
+      case "Custom":
+        filterLabel = DateFormat("MMMM d, yyyy").format(selectedDate);
+        break;
+      case "Range":
+        filterLabel = selectedRange == null
+            ? "Custom range"
+            : "${_fmtShort(selectedRange!.start)} – ${_fmtShort(selectedRange!.end)}";
+        break;
+      case "All":
+        filterLabel = "All Records";
+        break;
+      default:
+        filterLabel = "Today (${DateFormat('MMMM d, yyyy').format(DateTime(2026, 5, 2))})";
+    }
 
     doc.addPage(
       pw.Page(
@@ -491,7 +695,7 @@ void _showDeleteConfirmDialog(Map<String, String> e) {
             pw.Row(mainAxisAlignment: pw.MainAxisAlignment.spaceBetween, children: [
               pw.Text("Medical Records Report", style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold)),
               pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.end, children: [
-                pw.Text("Filter: $filterLabel", style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey700)),
+                pw.Text("Coverage: $filterLabel", style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey700)),
                 pw.Text("Total: ${summary['all']}  |  Students: ${summary['student']}  |  Faculty: ${summary['faculty']}  |  Staff: ${summary['staff']}", style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey600)),
               ]),
             ]),
@@ -535,159 +739,174 @@ void _showDeleteConfirmDialog(Map<String, String> e) {
   Widget build(BuildContext context) {
     final summary = _getVisitSummary();
 
-    return Scaffold(
-      backgroundColor: const Color(0xFFF8FAFC),
-      
-      floatingActionButton: FloatingActionButton(
-        
-        onPressed: _printRecords,
-        backgroundColor: kPrimary,
-        child: const Icon(Icons.print_outlined, color: Colors.white),
-      ),
-      appBar: AppBar(
-        
-     //   backgroundColor: Colors.white,
-        elevation: 0.5,
-        
-        title: Padding(
-          
-          padding: const EdgeInsets.only(top: 25, bottom: 15),
-          
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              
-              Container(
-                width: 44, height: 44,
-                
-                decoration: BoxDecoration(
-                  gradient: const LinearGradient(
-                      colors: [kPrimary, kPrimaryDk],
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight),
-                  borderRadius: BorderRadius.circular(12),
+    // Single DefaultTabController shared by the tab bar AND the
+    // TabBarView below, so tapping All / Student / Faculty / Staff
+    // actually switches (and filters) the table. (The previous version
+    // had two separate controllers — one wrapping the tab bar, another
+    // wrapping the TabBarView — so taps on the bar never reached the view.)
+    return DefaultTabController(
+      length: 4,
+      child: Scaffold(
+        backgroundColor: kBg,
+        floatingActionButton: FloatingActionButton(
+          onPressed: _printRecords,
+          backgroundColor: kPrimary,
+          child: const Icon(Icons.print_outlined, color: Colors.white),
+        ),
+        body: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _buildHeaderRow(summary),
+                const SizedBox(height: 22),
+                _buildSearchAndFilters(),
+                const SizedBox(height: 16),
+                _buildTabsBar(),
+                const SizedBox(height: 14),
+                Expanded(
+                  child: TabBarView(
+                    children: [
+                      _buildTable(null),
+                      _buildTable("Student"),
+                      _buildTable("Faculty"),
+                      _buildTable("Staff"),
+                    ],
+                  ),
                 ),
-                child: const Icon(Icons.menu_book_rounded, color: Colors.white, size: 22),
-              ),
-              const SizedBox(width: 15),
-              const Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text("Medical Records",
-                      style: TextStyle(
-                          color: kTextMain,
-                          fontWeight: FontWeight.w800,
-                          fontSize: 20)),
-                  Text("TCGC Clinic Management",
-                      style: TextStyle(color: kTextSub, fontSize: 12)),
-                ],
-              ),
-              const Spacer(),
-              _buildAppBarSummary(summary),
-            ],
-          ),
-        ),
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(54),
-          child: _buildTabBar(),
-        ),
-      ),
-      body: Column(
-        
-        children: [
-          _buildSearchAndFilters(),
-          Expanded(
-            child: DefaultTabController(
-              length: 4,
-              child: Builder(builder: (context) {
-                return TabBarView(
-                  children: [
-                    _buildTable(null),
-                    _buildTable("Student"),
-                    _buildTable("Faculty"),
-                    _buildTable("Staff"),
-                  ],
-                );
-              }),
+              ],
             ),
           ),
-        ],
+        ),
       ),
+    );
+  }
+
+  // ── HEADER: title on the left, big counts pinned to the right ─────────
+  // (Matches the old app-bar chip position, just scaled up for readability.)
+
+  Widget _buildHeaderRow(Map<String, int> summary) {
+    return LayoutBuilder(builder: (context, constraints) {
+      final bool isNarrow = constraints.maxWidth < 760;
+
+      final titleBlock = Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 44, height: 44,
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                  colors: [kPrimary, kPrimaryDk],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Icon(Icons.menu_book_rounded, color: Colors.white, size: 22),
+          ),
+          const SizedBox(width: 14),
+          const Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text("Medical Records",
+                  style: TextStyle(color: kTextDark, fontWeight: FontWeight.w800, fontSize: 22)),
+              Text("Manage student, faculty & staff visit records",
+                  style: TextStyle(color: kTextSub, fontSize: 13)),
+            ],
+          ),
+        ],
+      );
+
+      final chips = _buildBigCountChips(summary);
+
+      if (isNarrow) {
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [titleBlock, const SizedBox(height: 16), chips],
+        );
+      }
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          titleBlock,
+          const Spacer(),
+          chips,
+        ],
+      );
+    });
+  }
+
+  Widget _buildBigCountChips(Map<String, int> summary) {
+    final metrics = <Map<String, dynamic>>[
+      {"label": "Total",    "value": summary["all"]!,     "color": kPrimary,               "icon": Icons.groups_rounded},
+      {"label": "Students", "value": summary["student"]!, "color": const Color(0xFF2563EB), "icon": Icons.school_outlined},
+      {"label": "Faculty",  "value": summary["faculty"]!, "color": const Color(0xFFD97706), "icon": Icons.co_present_outlined},
+      {"label": "Staff",    "value": summary["staff"]!,   "color": const Color(0xFF7C3AED), "icon": Icons.badge_outlined},
+    ];
+
+    return Wrap(
+      alignment: WrapAlignment.end,
+      spacing: 12,
+      runSpacing: 12,
+      children: metrics.map((m) {
+        final color = m["color"] as Color;
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          decoration: BoxDecoration(
+            color: color.withOpacity(0.08),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: color.withOpacity(0.25)),
+          ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(m["icon"] as IconData, size: 22, color: color),
+            const SizedBox(width: 10),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text("${m["value"]}",
+                    style: TextStyle(fontSize: 26, fontWeight: FontWeight.w900, color: color, height: 1.0)),
+                Text(m["label"] as String,
+                    style: const TextStyle(fontSize: 12.5, color: kTextSub, fontWeight: FontWeight.w600)),
+              ],
+            ),
+          ]),
+        );
+      }).toList(),
     );
   }
 
   // ── CUSTOM TAB BAR ────────────────────────────────────────────────────
 
-  Widget _buildTabBar() {
-    return DefaultTabController(
-      length: 4,
-      child: Container(
-       color: Colors.white,
-        padding: const EdgeInsets.fromLTRB(16, 6, 16, 8),
-        child: Container(
-          height: 40,
-          padding: const EdgeInsets.all(4),
-          decoration: BoxDecoration(
-            color: const Color(0xFFEEF2F6),
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: TabBar(
-            indicator: BoxDecoration(
-              color: kPrimary,
-              borderRadius: BorderRadius.circular(9),
-              boxShadow: [
-                BoxShadow(color: kPrimary.withOpacity(0.3), blurRadius: 8, offset: const Offset(0, 2))
-              ],
-            ),
-            indicatorSize: TabBarIndicatorSize.tab,
-            dividerColor: Colors.transparent,
-            labelColor: Colors.white,
-            unselectedLabelColor: kTextSub,
-            labelStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
-            unselectedLabelStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
-            tabs: const [
-              Tab(text: "ALL"),
-              Tab(text: "STUDENTS"),
-              Tab(text: "FACULTY"),
-              Tab(text: "STAFF"),
-            ],
-          ),
-        ),
+  Widget _buildTabsBar() {
+    return Container(
+      height: 46,
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        color: const Color(0xFFEEF2F6),
+        borderRadius: BorderRadius.circular(14),
       ),
-    );
-  }
-
-  // ── APPBAR SUMMARY CHIPS ──────────────────────────────────────────────
-
-  Widget _buildAppBarSummary(Map<String, int> summary) {
-    return Row(mainAxisSize: MainAxisSize.min, children: [
-      _miniChip(summary["all"]!,     kPrimary,                 Icons.people_alt_rounded,  "All"),
-      const SizedBox(width: 6),
-      _miniChip(summary["student"]!, const Color(0xFF0EA5E9), Icons.school_rounded,       "Students"),
-      const SizedBox(width: 6),
-      _miniChip(summary["faculty"]!, const Color(0xFF8B5CF6), Icons.person_4_rounded,     "Faculty"),
-      const SizedBox(width: 6),
-      _miniChip(summary["staff"]!,   const Color(0xFFF59E0B), Icons.badge_rounded,        "Staff"),
-    ]);
-  }
-
-  Widget _miniChip(int count, Color color, IconData icon, String tooltip) {
-    return Tooltip(
-      message: tooltip,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
-        decoration: BoxDecoration(
-          color: color.withOpacity(0.09),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: color.withOpacity(0.28)),
+      child: TabBar(
+        indicator: BoxDecoration(
+          color: kPrimary,
+          borderRadius: BorderRadius.circular(10),
+          boxShadow: [
+            BoxShadow(color: kPrimary.withOpacity(0.3), blurRadius: 8, offset: const Offset(0, 2))
+          ],
         ),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          Icon(icon, size: 13, color: color),
-          const SizedBox(width: 4),
-          Text("$count",
-              style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: color)),
-        ]),
+        indicatorSize: TabBarIndicatorSize.tab,
+        dividerColor: Colors.transparent,
+        labelColor: Colors.white,
+        unselectedLabelColor: kTextSub,
+        labelStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+        unselectedLabelStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+        tabs: const [
+          Tab(text: "ALL"),
+          Tab(text: "STUDENTS"),
+          Tab(text: "FACULTY"),
+          Tab(text: "STAFF"),
+        ],
       ),
     );
   }
@@ -696,22 +915,18 @@ void _showDeleteConfirmDialog(Map<String, String> e) {
 
   Widget _buildSearchAndFilters() {
     return LayoutBuilder(builder: (context, constraints) {
-      bool isMobile = constraints.maxWidth < 700;
-      return Container(
-        color: const Color(0xFFF8FAFC),
-        padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
-        child: isMobile
-            ? Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                _searchField(),
-                const SizedBox(height: 10),
-                _filterRow(),
-              ])
-            : Row(children: [
-                Expanded(child: _searchField()),
-                const SizedBox(width: 14),
-                _filterRow(),
-              ]),
-      );
+      bool isMobile = constraints.maxWidth < 760;
+      return isMobile
+          ? Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              _searchField(),
+              const SizedBox(height: 10),
+              _filterRow(wrap: true),
+            ])
+          : Row(children: [
+              Expanded(child: _searchField()),
+              const SizedBox(width: 14),
+              _filterRow(wrap: false),
+            ]);
     });
   }
 
@@ -720,7 +935,7 @@ void _showDeleteConfirmDialog(Map<String, String> e) {
       onChanged: (v) => setState(() => searchQuery = v.toLowerCase()),
       style: const TextStyle(fontSize: 13, color: kTextMain),
       decoration: InputDecoration(
-        hintText: "Search anything...",
+        hintText: "Search by name, ID, complaint...",
         hintStyle: const TextStyle(color: kTextSub, fontSize: 13),
         prefixIcon: const Icon(Icons.search_rounded, color: kTextSub, size: 20),
         filled: true,
@@ -735,45 +950,62 @@ void _showDeleteConfirmDialog(Map<String, String> e) {
     );
   }
 
-  Widget _filterRow() {
+  Widget _filterRow({required bool wrap}) {
     final dateLabel = selectedFilter == "Custom"
         ? DateFormat("MMM d, yyyy").format(selectedDate)
         : "Pick Date";
+    final rangeLabel = selectedFilter == "Range" && selectedRange != null
+        ? "${_fmtShort(selectedRange!.start)} – ${_fmtShort(selectedRange!.end)}"
+        : "Pick Range";
 
-    return Row(mainAxisSize: MainAxisSize.min, children: [
-      GestureDetector(
-        onTap: _pickDate,
-        child: Container(
-          height: 40,
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          decoration: BoxDecoration(
-            color: selectedFilter == "Custom"
-                ? kPrimary.withOpacity(0.08)
-                : const Color(0xFFF1F5F9),
-            borderRadius: BorderRadius.circular(25),
-            border: Border.all(
-                color: selectedFilter == "Custom"
-                    ? kPrimary.withOpacity(0.4)
-                    : Colors.transparent),
-          ),
-          child: Row(mainAxisSize: MainAxisSize.min, children: [
-            Icon(Icons.calendar_today_outlined,
-                size: 14,
-                color: selectedFilter == "Custom" ? kPrimary : kTextSub),
-            const SizedBox(width: 6),
-            Text(dateLabel,
-                style: TextStyle(
-                    fontSize: 12,
-                    color: selectedFilter == "Custom" ? kPrimary : kTextSub,
-                    fontWeight: selectedFilter == "Custom" ? FontWeight.w600 : FontWeight.normal)),
-          ]),
-        ),
-      ),
-      const SizedBox(width: 8),
+    final chips = [
       _filterChip("Today"),
-      const SizedBox(width: 8),
       _filterChip("All"),
-    ]);
+      _pickerChip(
+        icon: Icons.calendar_today_outlined,
+        label: dateLabel,
+        active: selectedFilter == "Custom",
+        onTap: _pickDate,
+      ),
+      _pickerChip(
+        icon: Icons.date_range_outlined,
+        label: rangeLabel,
+        active: selectedFilter == "Range",
+        onTap: _pickRange,
+      ),
+    ];
+
+    if (wrap) {
+      return Wrap(spacing: 8, runSpacing: 8, children: chips);
+    }
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [for (int i = 0; i < chips.length; i++) ...[if (i > 0) const SizedBox(width: 8), chips[i]]],
+    );
+  }
+
+  Widget _pickerChip({required IconData icon, required String label, required bool active, required VoidCallback onTap}) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        height: 40,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        decoration: BoxDecoration(
+          color: active ? kPrimary.withOpacity(0.08) : const Color(0xFFF1F5F9),
+          borderRadius: BorderRadius.circular(25),
+          border: Border.all(color: active ? kPrimary.withOpacity(0.4) : Colors.transparent),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(icon, size: 14, color: active ? kPrimary : kTextSub),
+          const SizedBox(width: 6),
+          Text(label,
+              style: TextStyle(
+                  fontSize: 12,
+                  color: active ? kPrimary : kTextSub,
+                  fontWeight: active ? FontWeight.w600 : FontWeight.normal)),
+        ]),
+      ),
+    );
   }
 
   Widget _filterChip(String label) {
@@ -803,6 +1035,27 @@ void _showDeleteConfirmDialog(Map<String, String> e) {
   }
 
   // ── TABLE ─────────────────────────────────────────────────────────────
+  // Condensed to the columns that matter for a quick scan — patient, type
+  // (All tab only), complaint, medicine, qty, and when. Tap a row to open
+  // the full record including its audit trail. Styled to match the
+  // DataTable used on the Patients page (same header/cell type sizes).
+
+  Widget _typePill(String t) {
+    Color bg, fg;
+    switch (t) {
+      case "Student":
+        bg = const Color(0xFFDBEAFE); fg = const Color(0xFF1D4ED8); break;
+      case "Faculty":
+        bg = const Color(0xFFEDE9FE); fg = const Color(0xFF6D28D9); break;
+      default:
+        bg = const Color(0xFFDCFCE7); fg = const Color(0xFF15803D);
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(6)),
+      child: Text(t, style: TextStyle(color: fg, fontSize: 13, fontWeight: FontWeight.bold)),
+    );
+  }
 
   Widget _buildTable(String? type) {
     final filtered = _getFilteredRecords(typeFilter: type);
@@ -811,165 +1064,91 @@ void _showDeleteConfirmDialog(Map<String, String> e) {
       return Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
         Icon(Icons.search_off_rounded, size: 48, color: Colors.grey.shade300),
         const SizedBox(height: 8),
-        const Text("No records found",
-            style: TextStyle(color: kTextSub, fontSize: 14)),
+        const Text("No records found", style: TextStyle(color: kTextSub, fontSize: 14)),
       ]));
     }
 
     final bool isAllTab = type == null;
 
-    final List<String> headers = isAllTab
-        ? ["ID", "Full Name", "Type", "Dept", "Year / Position", "Complaint", "Medicine", "Qty", "Date", "Time", "Actions"]
-        : type == "Student"
-            ? ["Student ID", "Full Name", "Course", "Year", "Complaint", "Medicine", "Qty", "Date", "Time", "Actions"]
-            : ["Employee ID", "Full Name", "Institute", "Position", "Complaint", "Medicine", "Qty", "Date", "Time", "Actions"];
-
-    return LayoutBuilder(builder: (context, constraints) {
-      int columnCount = headers.length;
-      bool isMobile = constraints.maxWidth < 900;
-      double columnWidth = isMobile ? 150 : constraints.maxWidth / columnCount;
-
-      Widget cell(String text) => Container(
-        alignment: Alignment.center,
-        padding: const EdgeInsets.symmetric(vertical: 13, horizontal: 8),
-        child: Text(text,
-            softWrap: true,
-            textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: kTextMain)),
-      );
-
-      Widget typeCell(String t) {
-        final color = t == "Student"
-            ? const Color(0xFF3B82F6)
-            : t == "Faculty"
-                ? const Color(0xFF8B5CF6)
-                : const Color(0xFF10B981);
-        return Container(
-          alignment: Alignment.center,
-          padding: const EdgeInsets.symmetric(vertical: 13, horizontal: 8),
-          child: Text(t,
-                style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
-                    color: color)),
-         /* child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-            decoration: BoxDecoration(
-              color: color.withOpacity(0.08),
-              borderRadius: BorderRadius.circular(6),
-              border: Border.all(color: color.withOpacity(0.2)),
-            ),
-            child: Text(t,
-                style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
-                    color: color)),
-          ),*/
-        );
-      }
-
-      return Padding(
-        padding: const EdgeInsets.only(left: 16, right: 8, bottom: 20, top: 8),
-        child: Container(
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: kBorder),
-            boxShadow: [BoxShadow(color: Colors.black.withOpacity(.04), blurRadius: 10, offset: const Offset(0, 2))],
-          ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(16),
-            child: SizedBox(
-              height: constraints.maxHeight,
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: kBorder),
+          boxShadow: [BoxShadow(color: Colors.black.withOpacity(.04), blurRadius: 10, offset: const Offset(0, 2))],
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(16),
+          child: LayoutBuilder(builder: (context, constraints) {
+            return SingleChildScrollView(
               child: SingleChildScrollView(
                 scrollDirection: Axis.horizontal,
-                child: SizedBox(
-                  width: isMobile ? columnCount * columnWidth : constraints.maxWidth,
-                  child: Column(children: [
-                    // HEADER
-                    Table(
-                      columnWidths: {for (int i = 0; i < columnCount; i++) i: FixedColumnWidth(columnWidth)},
-                      children: [TableRow(
-                        decoration: const BoxDecoration(color: Color(0xFFF8FAFC)),
-                        children: headers.map((h) => Container(
-                          alignment: Alignment.center,
-                          padding: const EdgeInsets.symmetric(vertical: 13, horizontal: 8),
-                          child: Text(h,
-                              textAlign: TextAlign.center,
-                              style: const TextStyle(
-                                  fontWeight: FontWeight.w700,
-                                  letterSpacing: 0.4,
-                                  color: kTextSub,
-                                  fontSize: 12)),
-                        )).toList(),
-                      )],
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(minWidth: constraints.maxWidth),
+                  child: DataTable(
+                    headingRowHeight: 52,
+                    dataRowMinHeight: 60,
+                    dataRowMaxHeight: 72,
+                    showCheckboxColumn: false,
+                    headingRowColor: WidgetStateProperty.all(const Color(0xFFF8FAFC)),
+                    headingTextStyle: const TextStyle(
+                        fontWeight: FontWeight.w700, color: kTextSub, fontSize: 15, letterSpacing: 0.5),
+                    dataTextStyle: const TextStyle(color: kTextMain, fontSize: 16),
+                    columnSpacing: 24,
+                    horizontalMargin: 20,
+                    dividerThickness: 1,
+                    border: const TableBorder(
+                      horizontalInside: BorderSide(color: kBorder, width: 0.8),
                     ),
-                    // BODY
-                    Expanded(child: SingleChildScrollView(child: Table(
-                      columnWidths: {for (int i = 0; i < columnCount; i++) i: FixedColumnWidth(columnWidth)},
-                      border: TableBorder(
-                        horizontalInside: BorderSide(color: Colors.grey.shade100),
-                        verticalInside: BorderSide(color: Colors.grey.shade100),
-                      ),
-                      children: filtered.asMap().entries.map((entry) {
-                        final e = entry.value;
-                        final even = entry.key % 2 == 0;
-                        final row = isAllTab
-                            ? [cell(e["id"]!), cell(e["name"]!), typeCell(e["type"]!), cell(e["dept"]!), cell(e["year"]!), cell(e["complaint"]!), cell(e["medicine"]!), cell(e["qty"]!), cell(e["date"]!), cell(e["time"]!), _actionButtons(e)]
-                            : [cell(e["id"]!), cell(e["name"]!), cell(e["dept"]!), cell(e["year"]!), cell(e["complaint"]!), cell(e["medicine"]!), cell(e["qty"]!), cell(e["date"]!), cell(e["time"]!), _actionButtons(e)];
-                        return TableRow(
-                          decoration: BoxDecoration(
-                              color: even ? Colors.white : const Color(0xFFFAFCFD)),
-                          children: row,
-                        );
-                      }).toList(),
-                    ))),
-                  ]),
+                    columns: [
+                      const DataColumn(label: Text("PATIENT")),
+                      if (isAllTab) const DataColumn(label: Text("TYPE")),
+                      const DataColumn(label: Text("COMPLAINT")),
+                      const DataColumn(label: Text("MEDICINE")),
+                      const DataColumn(label: Text("QTY")),
+                      const DataColumn(label: Text("DATE & TIME")),
+                      const DataColumn(label: SizedBox()),
+                    ],
+                    rows: filtered.asMap().entries.map((entry) {
+                      final e = entry.value;
+                      final even = entry.key % 2 == 0;
+                      return DataRow(
+                        color: WidgetStateProperty.all(even ? Colors.white : const Color(0xFFFAFCFD)),
+                        onSelectChanged: (_) => _showDetailDialog(e),
+                        cells: [
+                          DataCell(Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(e["name"]!, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
+                              Text(e["id"]!, style: const TextStyle(fontSize: 12, color: kTextSub)),
+                            ],
+                          )),
+                          if (isAllTab) DataCell(_typePill(e["type"]!)),
+                          DataCell(Text(e["complaint"]!, overflow: TextOverflow.ellipsis)),
+                          DataCell(Text(e["medicine"]!, overflow: TextOverflow.ellipsis)),
+                          DataCell(Text(e["qty"]!)),
+                          DataCell(Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(_fmtDisplayDate(e["date"]!), style: const TextStyle(fontSize: 15)),
+                              Text(e["time"]!, style: const TextStyle(fontSize: 12, color: kTextSub)),
+                            ],
+                          )),
+                          DataCell(const Icon(Icons.chevron_right_rounded, size: 20, color: kTextSub)),
+                        ],
+                      );
+                    }).toList(),
+                  ),
                 ),
               ),
-            ),
-          ),
+            );
+          }),
         ),
-      );
-    });
-  }
-
-  // ── ACTION BUTTONS ────────────────────────────────────────────────────
-
-  Widget _actionButtons(Map<String, String> e) {
-    return Padding(
-      padding: const EdgeInsets.all(10),
-      child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-        Tooltip(
-          message: "Edit",
-          child: InkWell(
-            borderRadius: BorderRadius.circular(8),
-            onTap: () => _showEditDialog(e),
-            child: Container(
-              width: 32, height: 32,
-              decoration: BoxDecoration(
-                  color: kPrimary.withOpacity(0.08),
-                  borderRadius: BorderRadius.circular(8)),
-              child: const Icon(Icons.edit_outlined, size: 16, color: kPrimary),
-            ),
-          ),
-        ),
-        const SizedBox(width: 6),
-        Tooltip(
-          message: "Delete",
-          child: InkWell(
-            borderRadius: BorderRadius.circular(8),
-            onTap: () => _showDeleteConfirmDialog(e),
-            child: Container(
-              width: 32, height: 32,
-              decoration: BoxDecoration(
-                  color: kDanger.withOpacity(0.08),
-                  borderRadius: BorderRadius.circular(8)),
-              child: const Icon(Icons.delete_outline_rounded, size: 16, color: kDanger),
-            ),
-          ),
-        ),
-      ]),
+      ),
     );
   }
 }

@@ -118,12 +118,12 @@ class _LoginScreenState extends State<LoginScreen> {
           style: TextStyle(color: Color(0xFF64748B), fontSize: 14)),
         const SizedBox(height: 35),
 
-        _label('Email'),
+        _label('Username'),
         TextField(
           controller: _emailCtrl,
           keyboardType: TextInputType.emailAddress,
           textInputAction: TextInputAction.next,
-          decoration: _inputDeco(icon: Icons.email_outlined, hint: 'you@tcgcclinic.com'),
+          decoration: _inputDeco(icon: Icons.person, hint: ''),
         ),
         const SizedBox(height: 20),
 
