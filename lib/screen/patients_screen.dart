@@ -73,28 +73,23 @@ class _PatientsScreenState extends State<PatientsScreen>
   static const Color kTextSub   = Color(0xFF64748B);
   static const Color kDanger    = Color(0xFFEF4444);
 
-  final List<String> courses = [
-    'BSCS', 'BSIT', 'BSCrim', 'BSISM', 'BS Midwifery', 'IBFS', 'IAS',
+  final List<String> insti_ = [
+   // 'BSBA-HRM', 'BSBA-MM', 'BSOA', 'BEED', 'BSED-ENGLISH', 'BSED-FILIPINO', 'BSED-MATH', 'BSED-SOCSTUD', 'BS CRIM', 'BSISM','BSCS','AB COMM','AB ENGGLISH','AB POLSCI','GEN MID' -->PROGRAM
+   //   --> INSTITUTE
+    'IBFS','ITE','ICJE','ICS','IAS','IHS'
   ];
   final List<String> years = [
     '1st Year', '2nd Year', '3rd Year', '4th Year',
   ];
-  final List<String> institutes = [
-    'Institute of Computer Studies',
-    'Institute of Teacher Education',
-    'Institute of Health Sciences',
-    'Institute of Criminal Justice Education',
-    'Bachelor of Science in Industrial Security Management',
-    'Bachelor of Arts in English',
-    'Institute of Arts and Sciences',
-    'Bachelor of Science in Business Administration',
-    'Bachelor of Science in Office Administration',
-    'Library', 'Clinic', 'Registrar', 'Finance', 'HR Department',
+  final List<String> department = [
+    'IBFS','ITE','ICJE','ICS','IAS','IHS', //for teachers
+    'Library', 'Clinic', 'Registrar', 'Finance', 'HR Department',  //--> Department / Office
   ];
   final List<String> positions = [
     'Instructor', 'Dean', 'Librarian', 'Nurse',
-    'Security Guard', 'Janitor',
+    'Security Guard',
   ];
+
 
   @override
   void initState() {
@@ -106,10 +101,10 @@ class _PatientsScreenState extends State<PatientsScreen>
 
     if (PatientData.patients.isEmpty) {
       PatientData.patients.addAll([
-        Patient(id: '234567', last: 'Delacruz', first: 'Cresa', mi: 'S', field1: 'BSCS',     field2: '2nd Year',   category: 'Student'),
-        Patient(id: '234889', last: 'Doe',      first: 'John',  mi: 'A', field1: 'BSIT',     field2: '3rd Year',   category: 'Student'),
-        Patient(id: 'F001',   last: 'Smith',    first: 'Jane',  mi: '',  field1: 'Institute of Computer Studies', field2: 'Dean',       category: 'Faculty'),
-        Patient(id: 'F002',   last: 'Garcia',   first: 'Ramon', mi: '',  field1: 'Institute of Computer Studies', field2: 'Instructor', category: 'Faculty'),
+        Patient(id: '234567', last: 'Delacruz', first: 'Cresa', mi: 'S', field1: 'ICS',     field2: '2nd Year',   category: 'Student'),
+        Patient(id: '234889', last: 'Doe',      first: 'John',  mi: 'A', field1: 'ITE',     field2: '3rd Year',   category: 'Student'),
+        Patient(id: 'F001',   last: 'Smith',    first: 'Jane',  mi: '',  field1: 'IAS', field2: 'Dean',       category: 'Faculty'),
+        Patient(id: 'F002',   last: 'Garcia',   first: 'Ramon', mi: '',  field1: 'ICS', field2: 'Instructor', category: 'Faculty'),
         Patient(id: 'S001',   last: 'Lee',      first: 'Mark',  mi: '',  field1: 'Registrar', field2: 'Clerk',      category: 'Staff'),
         Patient(id: 'S002',   last: 'Navarro',  first: 'Rosa',  mi: '',  field1: 'Library',   field2: 'Librarian',  category: 'Staff'),
       ]);
@@ -124,7 +119,7 @@ class _PatientsScreenState extends State<PatientsScreen>
   }
 
   String get _idLabel  => filter == 'Student' ? 'Student ID' : filter == 'Faculty' ? 'Faculty ID' : 'Staff ID';
-  String get _label1   => filter == 'Student' ? 'Course' : 'Institute / Department';
+  String get _label1   => filter == 'Student' ? 'Institute' : 'Office / Department';
   String get _label2   => filter == 'Student' ? 'Year Level' : 'Position';
 
   List<Patient> get _filtered {
@@ -239,7 +234,7 @@ class _PatientsScreenState extends State<PatientsScreen>
     final firstCtrl = TextEditingController(text: isEdit ? editPatient.first : '');
     final miCtrl    = TextEditingController(text: isEdit ? editPatient.mi    : '');
 
-    final f1List = filter == 'Student' ? courses    : institutes;
+    final f1List = filter == 'Student' ? insti_    : department;
     final f2List = filter == 'Student' ? years      : positions;
 
     String? selectedF1 = (isEdit && f1List.contains(editPatient.field1)) ? editPatient.field1 : null;
@@ -596,7 +591,7 @@ class _PatientsScreenState extends State<PatientsScreen>
               onChanged: (_) => setState(() {}),
               style: const TextStyle(fontSize: 17, color: kTextMain),
               decoration: InputDecoration(
-                hintText: 'Search by ID, name, course…',
+                hintText: 'Search by ID, name, instiitute...',
                 hintStyle: const TextStyle(color: kTextSub, fontSize: 16),
                 prefixIcon: const Icon(Icons.search_rounded, color: kTextSub, size: 20),
                 filled: true,

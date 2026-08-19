@@ -75,9 +75,9 @@ class _ClinicVisitScreenState extends State<ClinicVisitScreen> {
 
   // ── SHARED PATIENT DATABASE ───────────────────────────────────────────
   final List<Map<String, dynamic>> _patients = [
-    {"id":"234567","last":"Delacruz","first":"Cresa","mi":"S","role":"Student","field1":"BSCS","field2":"2nd Year"},
-    {"id":"234889","last":"Doe","first":"John","mi":"A","role":"Student","field1":"BSIT","field2":"3rd Year"},
-    {"id":"F001","last":"Smith","first":"Jane","mi":"","role":"Faculty","field1":"ICS","field2":"Dean"},
+    {"id":"234567","last":"Delacruz","first":"Cresa","mi":"S","role":"Student","field1":"ICS","field2":"2nd Year"},
+    {"id":"234889","last":"Doe","first":"John","mi":"A","role":"Student","field1":"ITE","field2":"3rd Year"},
+    {"id":"F001","last":"Smith","first":"Jane","mi":"","role":"Faculty","field1":"IAS","field2":"Dean"},
     {"id":"F002","last":"Garcia","first":"Ramon","mi":"","role":"Faculty","field1":"ICS","field2":"Instructor"},
     {"id":"S001","last":"Lee","first":"Mark","mi":"","role":"Staff","field1":"Registrar","field2":"Staff"},
     {"id":"S002","last":"Navarro","first":"Rosa","mi":"","role":"Staff","field1":"Library","field2":"Staff"},
@@ -99,23 +99,14 @@ class _ClinicVisitScreenState extends State<ClinicVisitScreen> {
   ];
 
   // TODO(confirm with registrar): confirm official program codes
-  final List<String> courses = [
-    'BSCS', 'BSIT', 'BSCrim', 'BS Ind. Security Mgmt.', 'BS Midwifery',
-    'BSBA', 'BSOA', 'AB English',
+  final List<String> institute = [
+    'IBFS','ITE','ICJE','ICS','IAS','IHS'
   ];
   final List<String> years = [
     '1st Year', '2nd Year', '3rd Year', '4th Year',
   ];
-  final List<String> institutes = [
-    'Institute of Computer Studies',
-    'Institute of Teacher Education',
-    'Institute of Health Sciences',
-    'Institute of Criminal Justice Education',
-    'Bachelor of Science in Industrial Security Management',
-    'Bachelor of Arts in English',
-    'Institute of Arts and Sciences',
-    'Bachelor of Science in Business Administration',
-    'Bachelor of Science in Office Administration',
+  final List<String> department = [
+    'IBFS','ITE','ICJE','ICS','IAS','IHS',
     'Library', 'Clinic', 'Registrar', 'Finance', 'HR Department',
   ];
   final List<String> positions = [
@@ -833,16 +824,16 @@ class _ClinicVisitScreenState extends State<ClinicVisitScreen> {
           patientExists
               ? _lockableField(
                   fieldKey: 'dept',
-                  label: selectedRole == "Student" ? "Course" : "Institute/Dept",
+                  label: selectedRole == "Student" ? "Institute" : "Dept/Office",
                   controller: _instituteCtrl,
-                  options: selectedRole == "Student" ? courses : institutes,
+                  options: selectedRole == "Student" ? institute : department,
                   isEditing: _editingCourseField,
                   setEditingFlag: (v) => setState(() => _editingCourseField = v),
                 )
               : _buildDropdownField(
-                  label: selectedRole == "Student" ? "Course" : "Institute/Dept",
+                  label: selectedRole == "Student" ? "Course" : "Dept/Office",
                   value: selectedRole == "Student" ? _selectedCourse : _selectedInstitute,
-                  items: selectedRole == "Student" ? courses : institutes,
+                  items: selectedRole == "Student" ? institute : department,
                   controller: _instituteCtrl,
                   onChanged: (v) => setState(() {
                     if (selectedRole == "Student") {
