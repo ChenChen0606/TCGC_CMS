@@ -1,0 +1,7 @@
+# TCGC Clinic Management System - Supabase configuration.
+# Hosted project: bwhrosebljcdgykreyyp
+# Used mainly by the Supabase CLI (e.g. `supabase functions deploy`).
+project_id = "bwhrosebljcdgykreyyp"
+
+[auth]
+enabled = true
