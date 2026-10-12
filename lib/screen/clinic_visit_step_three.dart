@@ -209,6 +209,7 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
       _c.setField(d.serviceId, f.key, value);
     }
     _naggedField = '${d.serviceId}/${f.key}';
+    _autoCompleteIfValid(d);
     setState(() {});
   }
 
@@ -1210,6 +1211,7 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
         if (d == null) return;
         _c.setField(d.serviceId, f.key, name);
         _naggedField = f.key;
+        _autoCompleteIfValid(d);
         setState(() {});
       },
       itemBuilder: (context) => [
@@ -1334,7 +1336,10 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
                 _optionChip(
                   label: name,
                   selected: true,
-                  onTap: () => _toggleInventoryPick(d, f, name),
+                  onTap: () {
+                    _toggleInventoryPick(d, f, name);
+                    _autoCompleteIfValid(d);
+                  },
                 ),
             ],
           ),
@@ -1368,7 +1373,10 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
                 _optionChip(
                   label: m.stock > 0 ? '${m.name}  ·  ${m.stock}' : m.name,
                   selected: chosen.contains(m.name),
-                  onTap: () => _toggleInventoryPick(d, f, m.name),
+                  onTap: () {
+                    _toggleInventoryPick(d, f, m.name);
+                    _autoCompleteIfValid(d);
+                  },
                 ),
             ],
           ),
@@ -1454,6 +1462,7 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
     }
     box.clear();
     _naggedField = f.key;
+    _autoCompleteIfValid(d);
     setState(() {});
   }
 
@@ -1462,6 +1471,7 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
     if (!current.remove(name)) current.add(name);
     _c.setField(d.serviceId, f.key, current);
     _naggedField = f.key;
+    _autoCompleteIfValid(d);
     setState(() {});
   }
 
@@ -1572,6 +1582,7 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
       onChanged: (value) {
         _c.setField(d.serviceId, f.key, value);
         _naggedField = key;
+        _autoCompleteIfValid(d);
         setState(() {});
       },
       decoration: _decoration(f),
@@ -1595,6 +1606,7 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
             onTap: () {
               _c.toggleChoice(d.serviceId, f.key, o);
               _naggedField = key;
+              _autoCompleteIfValid(d);
               setState(() {});
             },
           ),
@@ -1625,6 +1637,7 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
                 _c.toggleChoice(d.serviceId, f.key, o, max: 1);
               }
               _naggedField = key;
+              _autoCompleteIfValid(d);
               setState(() {});
             },
           ),
@@ -1689,6 +1702,7 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
                   onTap: () {
                     _c.toggleChoice(d.serviceId, f.key, o);
                     _naggedField = key;
+                    _autoCompleteIfValid(d);
                     setState(() {});
                   },
                 ),
@@ -1758,6 +1772,7 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
         if (picked == null) return;
         _c.setField(d.serviceId, f.key, _isoOf(picked));
         _naggedField = key;
+        _autoCompleteIfValid(d);
         setState(() {});
       },
       borderRadius: BorderRadius.circular(9),
@@ -1962,8 +1977,7 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
     // finished with this" belongs, and pressing it marks the service saved
     // without moving off the sheet, so the nurse is left looking at the
     // finished form rather than the next service.
-    final customId = d.currentSlide.custom?.id;
-    final isFormSheet = customId == 'bp_form' || customId == 'form_review';
+    // final customId = d.currentSlide.custom?.id;
 
     // Prev is absent on the first slide rather than disabled. A greyed-out
     // "‹ Prev" on slide 1 of every form is a control that cannot do anything,
@@ -1997,21 +2011,17 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
               const SizedBox(width: 6),
             ],
             _footerButton(
-              label: d.isLastSlide ? 'Done' : 'Next ›',
+              label: d.isLastSlide ? 'Next ›' : 'Next ›',
               filled: true,
               onPressed: d.isLastSlide
-                  ? (isFormSheet ? () => _finishService(d) : null)
+                  ? () => _goToNextSlide(d)
                   : () => _goToNextSlide(d),
             ),
           ] else if (!navOnly) ...[
             // The one-page form's own finish. Always live: Done refuses on a
             // half-filled form with the name of the box, which it can because
             // every box is on the same page as the button.
-            _footerButton(
-              label: 'Done',
-              filled: true,
-              onPressed: () => _finishService(d),
-            ),
+            // Done removed - auto complete on valid input
           ],
           const Spacer(),
           // The wizard's Back and Continue, in the form's own footer. The bar
@@ -2128,29 +2138,7 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
   /// in the required fields" would send the nurse hunting for a box that is not
   /// there. The nag also paints the named field red, which works on the one-page
   /// form precisely because the box and the button share a page.
-  void _finishService(ServiceDraft d) {
-    final missing =
-        d.spec.requiredKeysIn(d.data).where((k) => !_isAnswered(d, k)).toList();
-    if (missing.isNotEmpty) {
-      setState(() => _naggedField = '${d.serviceId}/${missing.first}');
-      _toast('Still needed: ${_labelOfKey(d, missing.first)}.');
-      return;
-    }
-    setState(() {
-      d.refreshStatus();
-      d.dirty = false;
-    });
-    _toast('${d.label} saved.');
-    // If only one service and it became completed, auto-show form_review
-    if (_c.drafts.length == 1 && d.status == ServiceDraftStatus.completed) {
-      final spec = d.spec;
-      final reviewIndex =
-          spec.slides.indexWhere((s) => s.custom?.id == 'form_review');
-      if (reviewIndex >= 0 && d.slide != reviewIndex) {
-        setState(() => _c.goToSlide(reviewIndex));
-      }
-    }
-  }
+  // _finishService removed - auto complete handles completion
 
   /// Whether one required key holds an answer the form would accept. A filled-in
   /// box is not the same as an answered one: a systolic of 9999 is filled in, and
@@ -2163,14 +2151,16 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
     return !empty && d.spec.validate(key, v) == null;
   }
 
-  /// The box's own name, so a refusal can say "Position" rather than
-  /// "position_required_key".
-  String _labelOfKey(ServiceDraft d, String key) {
-    for (final f in d.spec.fields) {
-      if (f.key == key) return f.label;
+  void _autoCompleteIfValid(ServiceDraft d) {
+    final missing =
+        d.spec.requiredKeysIn(d.data).where((k) => !_isAnswered(d, k)).toList();
+    if (missing.isEmpty && d.status != ServiceDraftStatus.completed) {
+      d.refreshStatus();
+      d.dirty = false;
     }
-    return key;
   }
+
+  // _labelOfKey no longer needed
 
   Widget _slideDots(ServiceDraft d, int slides) {
     return Padding(
@@ -2846,6 +2836,7 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
                 selected: current == o.type,
                 onTap: () {
                   _c.setField(d.serviceId, 'doc_type', o.type);
+                  _autoCompleteIfValid(d);
                   setState(() {});
                 },
               ),
@@ -2993,6 +2984,7 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
                   onTap: () {
                     _c.setField(d.serviceId, 'clearance_status', o.$1);
                     d.refreshStatus();
+                    _autoCompleteIfValid(d);
                     setState(
                         () => _naggedField = '${d.serviceId}/clearance_status');
                   },
@@ -3128,6 +3120,7 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
               // Written into the draft as well, so a nurse who goes back to
               // step 2 and returns has not lost the findings.
               _c.setField(d.serviceId, 'exam_$key', v);
+              _autoCompleteIfValid(d);
             },
             style: const TextStyle(fontSize: 12.5, color: AppColors.textMain),
             decoration: InputDecoration(
@@ -3379,6 +3372,7 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
                   selected: (timesPicked[m.name] ?? 0) > 0,
                   onTap: () {
                     _c.addMedicine(m);
+                    _autoCompleteIfValid(d);
                     setState(() {});
                   },
                 ),
@@ -3462,6 +3456,7 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
               IconButton(
                 onPressed: () {
                   _c.removeMedicine(index);
+                  _autoCompleteIfValid(d);
                   setState(() {});
                 },
                 icon: const Icon(Icons.close_rounded, size: 16),
@@ -3484,6 +3479,7 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
                   number: true,
                   onChanged: (v) {
                     m.quantity = VitalsInterpreter.parse(v)?.toInt();
+                    _autoCompleteIfValid(d);
                     setState(() {});
                   },
                 ),
@@ -3496,6 +3492,7 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
                   hint: 'tablet',
                   onChanged: (v) {
                     m.unit = v;
+                    _autoCompleteIfValid(d);
                     setState(() {});
                   },
                 ),
@@ -3508,6 +3505,7 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
                   hint: '1 tab',
                   onChanged: (v) {
                     m.dose = v;
+                    _autoCompleteIfValid(d);
                     setState(() {});
                   },
                 ),
@@ -3526,6 +3524,7 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
                   hint: 'twice a day',
                   onChanged: (v) {
                     m.frequency = v;
+                    _autoCompleteIfValid(d);
                     setState(() {});
                   },
                 ),
@@ -3533,7 +3532,7 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
               const SizedBox(width: 12),
               Expanded(
                 flex: 2,
-                child: _actionPicker(m),
+                child: _actionPicker(d, m),
               ),
             ],
           ),
@@ -3545,6 +3544,7 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
               hint: 'Why the medicine was not administered',
               onChanged: (v) {
                 m.reasonNotGiven = v;
+                _autoCompleteIfValid(d);
                 setState(() {});
               },
             ),
@@ -3560,6 +3560,7 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
                   hint: 'How the patient responded',
                   onChanged: (v) {
                     m.response = v;
+                    _autoCompleteIfValid(d);
                     setState(() {});
                   },
                 ),
@@ -3572,6 +3573,7 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
                   hint: 'Anything else about this medicine',
                   onChanged: (v) {
                     m.notes = v;
+                    _autoCompleteIfValid(d);
                     setState(() {});
                   },
                 ),
@@ -3655,7 +3657,7 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
 
   /// The label-and-box shape [_inline] draws, but as a choice list: what was
   /// done with this medicine. Only adminstered lines deduct stock at save time.
-  Widget _actionPicker(MedicineDose m) {
+  Widget _actionPicker(ServiceDraft d, MedicineDose m) {
     const options = [
       'Given',
       'Partially Given',
@@ -3692,6 +3694,7 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
           onChanged: (value) {
             if (value == null) return;
             m.action = value;
+            _autoCompleteIfValid(d);
             setState(() {});
           },
           decoration: InputDecoration(
@@ -3856,6 +3859,7 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
       ..showSnackBar(SnackBar(
         content: Text(message),
         behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 1),
         // Clears the footer's button bar, which is pinned to the bottom of the
         // form card. A nag about a box that has to be filled in arrives exactly
         // when the nurse is reaching for Next, and a message lying across Next

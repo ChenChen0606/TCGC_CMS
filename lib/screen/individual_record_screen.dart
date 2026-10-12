@@ -50,10 +50,15 @@ const String _kAddProgram = '__add_program__';
 const String _kAddDepartment = '__add_department__';
 const String _kAddPosition = '__add_position__';
 
-/// Sentinel for the "+ New institute" entry in the Add Institute / Program
-/// dialog's institute dropdown — reveals the code and name boxes for an
-/// institute that is not on file yet.
-const String _kNewInstitute = '__new_institute__';
+/// Sentinel for the "Add institute..." entry in a Faculty member's Institute
+/// dropdown (the department field). Separate from [_kAddProgram] only so the two
+/// add affordances on the same form are told apart by value, not by position.
+const String _kAddInstitute = '__add_institute__';
+
+/// Sentinel value for the "Add school year & semester..." item in the term
+/// dropdown. Like [_kAddProgram], it is a value no real term label can equal, so
+/// choosing it opens the add-term dialog instead of filing a record.
+const String _kAddTerm = '__add_term__';
 
 // ── MODEL ────────────────────────────────────────────────────────────────────
 // The `IndividualRecord` model and the import row/result models now live in
@@ -139,6 +144,22 @@ class _IndividualRecordScreenState extends State<IndividualRecordScreen>
   /// True while the generated number is being fetched from the database, so the
   /// ID field can show a placeholder instead of a stale in-memory guess.
   bool _fetchingId = false;
+
+  /// Bumped every time an "Add ..." dropdown entry opens its dialog, so the
+  /// picker it came from is rebuilt and drops the sentinel it was showing.
+  ///
+  /// Choosing "Add institute..." sets the field's value to that sentinel before
+  /// the dialog opens; without a key change the field would keep displaying
+  /// "Add institute..." after the dialog closes — misleading when the dialog was
+  /// cancelled and nothing was written. Each picker's `key` includes this.
+  int _pickerEpoch = 0;
+
+  /// Resets the add-pickers to their stored values and repaints the form.
+  void _resetPickers() {
+    if (!mounted) return;
+    setState(() => _pickerEpoch++);
+    _refreshForm();
+  }
 
   /// Counts ID fetches so a late reply can be recognised and dropped.
   ///
@@ -1100,6 +1121,17 @@ class _IndividualRecordScreenState extends State<IndividualRecordScreen>
         hintText: 'Search by ID, name, program, contact...',
         hintStyle: const TextStyle(color: kTextSub, fontSize: 15),
         prefixIcon: const Icon(Icons.search_rounded, color: kTextSub, size: 20),
+        // The X is the way back to the full roster. It appears the moment there
+        // is text to clear, so clearing lives in the field itself rather than in
+        // a separate "Clear search" strip under the table.
+        suffixIcon: search.text.isEmpty
+            ? null
+            : IconButton(
+                tooltip: 'Clear search',
+                onPressed: () => setState(search.clear),
+                icon:
+                    const Icon(Icons.close_rounded, color: kTextSub, size: 18),
+              ),
         filled: true,
         fillColor: kCard,
         contentPadding: const EdgeInsets.symmetric(vertical: 12),
@@ -1614,7 +1646,7 @@ class _IndividualRecordScreenState extends State<IndividualRecordScreen>
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       _dlabel('School Year & Semester'),
       DropdownButtonFormField<String>(
-        key: ValueKey('form-term-$_fCategory'),
+        key: ValueKey('form-term-$_fCategory-$_fPeriodId-$_pickerEpoch'),
         initialValue: kAcademicTerms
                 .any((t) => t.year == current && t.semester == _fSemester)
             ? academicTermLabel(current, _fSemester ?? '')
@@ -1654,8 +1686,28 @@ class _IndividualRecordScreenState extends State<IndividualRecordScreen>
                 ],
               ]),
             ),
+          // Starts a new term from here, because that is where a clerk notices
+          // the year they need is missing. The service creates the row in
+          // `academic_periods` and makes it current, so the wait to go to a
+          // settings page first is gone.
+          const DropdownMenuItem(
+            value: _kAddTerm,
+            child: Row(children: [
+              Icon(Icons.add_circle_outline, size: 17, color: kPrimary),
+              SizedBox(width: 8),
+              Text('Add school year & semester...',
+                  style: TextStyle(
+                      fontSize: 15,
+                      color: kPrimary,
+                      fontWeight: FontWeight.w600)),
+            ]),
+          ),
         ],
         onChanged: (v) {
+          if (v == _kAddTerm) {
+            _openAddPeriodDialog();
+            return;
+          }
           if (v == null) return;
           final i = v.indexOf(' · ');
           if (i < 0) return;
@@ -1865,7 +1917,8 @@ class _IndividualRecordScreenState extends State<IndividualRecordScreen>
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       _dlabel('Institute'),
       DropdownButtonFormField<String>(
-        key: ValueKey('form-inst-${_catalog.length}-$_fInstitute'),
+        key:
+            ValueKey('form-inst-${_catalog.length}-$_fInstitute-$_pickerEpoch'),
         initialValue: _fInstitute,
         isExpanded: true,
         decoration: _ideco('Select institute',
@@ -1912,7 +1965,7 @@ class _IndividualRecordScreenState extends State<IndividualRecordScreen>
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       _dlabel('Program'),
       DropdownButtonFormField<String>(
-        key: ValueKey('form-prog-$institute-$_fProgram'),
+        key: ValueKey('form-prog-$institute-$_fProgram-$_pickerEpoch'),
         initialValue: _fProgram,
         isExpanded: true,
         decoration: _ideco(
@@ -1939,7 +1992,7 @@ class _IndividualRecordScreenState extends State<IndividualRecordScreen>
             child: Row(children: [
               Icon(Icons.add_circle_outline, size: 17, color: kPrimary),
               SizedBox(width: 8),
-              Text('Add institute / program...',
+              Text('Add program...',
                   style: TextStyle(
                       fontSize: 15,
                       color: kPrimary,
@@ -1949,7 +2002,9 @@ class _IndividualRecordScreenState extends State<IndividualRecordScreen>
         ],
         onChanged: (v) {
           if (v == _kAddProgram) {
-            _openAddProgramDialog();
+            // Opened from here, a program is required and the institute is the
+            // one already chosen above — an existing institute, never a new one.
+            _openAddProgramDialog(requireProgram: true);
           } else if (v != null) {
             _fProgram = v;
             _refreshForm();
@@ -1965,24 +2020,41 @@ class _IndividualRecordScreenState extends State<IndividualRecordScreen>
   /// [ReferenceDataService.saveInstituteAndProgram]); an institute alone is
   /// legal and its program is optional, but a program always lands on an
   /// institute — new or already on file.
-  Future<void> _openAddProgramDialog() async {
+  ///
+  /// [requireProgram] is set by the Program dropdown's "Add program..." entry,
+  /// which must produce a program and only picks from institutes on file.
+  /// [intoFacultyInstitute] routes the chosen institute into [_fDepartment]
+  /// instead of [_fInstitute], because a Faculty member's "Institute" field is
+  /// the department dropdown.
+  Future<void> _openAddProgramDialog({
+    bool requireProgram = false,
+    bool intoFacultyInstitute = false,
+  }) async {
     final result = await showDialog<
         ({String instituteCode, String programCode, bool created})?>(
       context: context,
       builder: (ctx) => _AddProgramDialog(
         institutes: (_catalog.keys.toList()..sort()),
-        initialInstitute: _fInstitute,
+        initialInstitute: intoFacultyInstitute ? _fDepartment : _fInstitute,
+        requireProgram: requireProgram,
       ),
     );
-    if (result == null || !mounted) return;
+    if (result == null || !mounted) {
+      _resetPickers();
+      return;
+    }
     setState(() {
-      _fInstitute = result.instituteCode;
-      // An institute on its own comes back with an empty program code: leave the
-      // program box empty rather than fabricate a "$institute|" value no item
-      // matches.
-      _fProgram = result.programCode.isEmpty
-          ? null
-          : _programValue(result.instituteCode, result.programCode);
+      if (intoFacultyInstitute) {
+        _fDepartment = result.instituteCode;
+      } else {
+        _fInstitute = result.instituteCode;
+        // An institute on its own comes back with an empty program code: leave
+        // the program box empty rather than fabricate a "$institute|" value no
+        // item matches.
+        _fProgram = result.programCode.isEmpty
+            ? null
+            : _programValue(result.instituteCode, result.programCode);
+      }
     });
     _refreshForm();
     // Only when something was actually written. Picking an institute already on
@@ -2017,7 +2089,7 @@ class _IndividualRecordScreenState extends State<IndividualRecordScreen>
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       _dlabel(isFaculty ? 'Institute' : 'Department / Office'),
       DropdownButtonFormField<String>(
-        key: ValueKey('form-dept-$_fCategory-$_fDepartment'),
+        key: ValueKey('form-dept-$_fCategory-$_fDepartment-$_pickerEpoch'),
         initialValue: _fDepartment,
         isExpanded: true,
         decoration: _ideco(
@@ -2028,10 +2100,24 @@ class _IndividualRecordScreenState extends State<IndividualRecordScreen>
         items: [
           ...options.map((e) => DropdownMenuItem(
               value: e, child: Text(e, style: const TextStyle(fontSize: 15)))),
-          // Faculty's "Department" is the institute picker, and a new institute
-          // is already added through the Program dropdown, so the add item is
-          // only offered to staff — whose list really is departments / offices.
-          if (!isFaculty)
+          // Faculty's "Department" is really the institute picker, so its add
+          // entry creates an institute (with an optional first program). Staff's
+          // list is genuinely departments / offices, so its entry adds one of
+          // those. Neither category can reach the other's write.
+          if (isFaculty)
+            const DropdownMenuItem(
+              value: _kAddInstitute,
+              child: Row(children: [
+                Icon(Icons.add_circle_outline, size: 17, color: kPrimary),
+                SizedBox(width: 8),
+                Text('Add institute...',
+                    style: TextStyle(
+                        fontSize: 15,
+                        color: kPrimary,
+                        fontWeight: FontWeight.w600)),
+              ]),
+            )
+          else
             const DropdownMenuItem(
               value: _kAddDepartment,
               child: Row(children: [
@@ -2046,6 +2132,10 @@ class _IndividualRecordScreenState extends State<IndividualRecordScreen>
             ),
         ],
         onChanged: (v) {
+          if (v == _kAddInstitute) {
+            _openAddProgramDialog(intoFacultyInstitute: true);
+            return;
+          }
           if (v == _kAddDepartment) {
             _openAddDepartmentDialog();
             return;
@@ -2064,7 +2154,7 @@ class _IndividualRecordScreenState extends State<IndividualRecordScreen>
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       _dlabel('Position'),
       DropdownButtonFormField<String>(
-        key: ValueKey('form-pos-$_fCategory-$_fPosition'),
+        key: ValueKey('form-pos-$_fCategory-$_fPosition-$_pickerEpoch'),
         initialValue: _fPosition,
         isExpanded: true,
         decoration: _ideco(
@@ -2119,7 +2209,10 @@ class _IndividualRecordScreenState extends State<IndividualRecordScreen>
             (await ReferenceDataService.addDepartment(value)).name,
       ),
     );
-    if (name == null || !mounted) return;
+    if (name == null || !mounted) {
+      _resetPickers();
+      return;
+    }
     setState(() => _fDepartment = name);
     _refreshForm();
     _showResultDialog('Saved Record');
@@ -2139,10 +2232,46 @@ class _IndividualRecordScreenState extends State<IndividualRecordScreen>
             (await ReferenceDataService.addPosition(value)).name,
       ),
     );
-    if (name == null || !mounted) return;
+    if (name == null || !mounted) {
+      _resetPickers();
+      return;
+    }
     setState(() => _fPosition = name);
     _refreshForm();
     _showResultDialog('Saved Record');
+  }
+
+  /// Opens the Add School Year & Semester dialog, then files the form under the
+  /// term it created.
+  ///
+  /// Adding a term here means "start running this term": the service writes the
+  /// row to `academic_periods`, makes it the Active term, and retires the
+  /// previous term's enrolments. That retirement is the reason the button lives
+  /// in the record form beside the term picker — the roster and the Clinic Visit
+  /// lookup both read Active enrolments of the current term, so the moment this
+  /// succeeds the previous year's records stop loading there.
+  Future<void> _openAddPeriodDialog() async {
+    final period = await showDialog<AcademicPeriodOption>(
+      context: context,
+      builder: (ctx) => const _AddPeriodDialog(),
+    );
+    if (period == null || !mounted) {
+      _resetPickers();
+      return;
+    }
+    final parts = period.acadYear.split('-');
+    setState(() {
+      _cYearStart.text = parts.isNotEmpty ? parts.first : '';
+      _cYearEnd.text = parts.length > 1 ? parts.last : '';
+      _fSemester = period.semester;
+      _fPeriodId = period.id;
+    });
+    _refreshForm();
+    _showResultDialog(
+      'New School Year & Semester',
+      detail: '${period.label} is now the current term. Earlier terms were '
+          'deactivated, so only this term is on the roster and in Clinic Visit.',
+    );
   }
 
   Widget _dlabel(String label) => Padding(
@@ -2594,35 +2723,7 @@ class _IndividualRecordScreenState extends State<IndividualRecordScreen>
                       ),
                     ),
                   ),
-                  _tableFooter(),
                 ]),
-    );
-  }
-
-  /// The strip under the table is now only a way out of a search that narrowed
-  /// the roster, so it disappears entirely when nothing is filtered. The term is
-  /// no longer shown as a page caption — it sits under each person's name, where
-  /// it belongs to that row.
-  Widget _tableFooter() {
-    final searching = search.text.trim().isNotEmpty;
-    if (!searching) return const SizedBox.shrink();
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 11),
-      decoration: const BoxDecoration(
-        border: Border(top: BorderSide(color: kBorder, width: 0.8)),
-      ),
-      child: Row(children: [
-        TextButton(
-          onPressed: () => setState(search.clear),
-          style: TextButton.styleFrom(
-            foregroundColor: kPrimary,
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-            minimumSize: Size.zero,
-            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-          ),
-          child: const Text('Clear search'),
-        ),
-      ]),
     );
   }
 
@@ -2712,16 +2813,6 @@ class _IndividualRecordScreenState extends State<IndividualRecordScreen>
             textAlign: TextAlign.center,
             style: const TextStyle(color: kTextSub, fontSize: 16),
           ),
-          // A search that finds nothing while the category plainly has people in
-          // it needs a way out, or the empty table is a dead end.
-          if (q.isNotEmpty) ...[
-            const SizedBox(height: 16),
-            OutlinedButton.icon(
-              onPressed: () => setState(search.clear),
-              icon: const Icon(Icons.close_rounded, size: 18),
-              label: const Text('Clear search'),
-            ),
-          ],
         ]),
       ),
     );
@@ -3075,7 +3166,19 @@ class _AddProgramDialog extends StatefulWidget {
   final List<String> institutes;
   final String? initialInstitute;
 
-  const _AddProgramDialog({required this.institutes, this.initialInstitute});
+  /// True when opened from the Program dropdown's "Add program..." entry.
+  ///
+  /// That path carries one promise the Institute path does not: the program is
+  /// the whole point, so it is required, and the institute must already exist
+  /// and be chosen from a dropdown. The Institute path instead shows boxes for a
+  /// new institute (code and name required) with the program optional alongside.
+  final bool requireProgram;
+
+  const _AddProgramDialog({
+    required this.institutes,
+    this.initialInstitute,
+    this.requireProgram = false,
+  });
 
   @override
   State<_AddProgramDialog> createState() => _AddProgramDialogState();
@@ -3089,10 +3192,14 @@ class _AddProgramDialogState extends State<_AddProgramDialog> {
   static const Color kTextSub = AppColors.textSub;
   static const Color kDanger = AppColors.danger;
 
-  /// One form, not a mode picker. The institute dropdown says whether this is an
-  /// institute already on file or a new one; picking "New institute" reveals the
-  /// code and name boxes. The program is optional throughout.
-  bool _newInstitute = false;
+  /// Two paths share this dialog but not its shape.
+  ///
+  /// Institute path — every field is a box: the code and name are both required,
+  /// and the institute is always new, because the entry that opened this said
+  /// "add institute". The program is offered alongside as optional.
+  ///
+  /// Program path — the institute must already be on file, so it stays a
+  /// dropdown and the two program boxes are required.
   String? _institute;
   final TextEditingController _instCodeCtrl = TextEditingController();
   final TextEditingController _instNameCtrl = TextEditingController();
@@ -3104,13 +3211,9 @@ class _AddProgramDialogState extends State<_AddProgramDialog> {
   @override
   void initState() {
     super.initState();
-    _institute = widget.initialInstitute;
-    if (widget.institutes.isEmpty && _institute == null) {
-      // Nothing on file yet, so there is no existing institute to pick: open on
-      // the new-institute path instead of an empty dropdown.
-      _newInstitute = true;
-    } else {
-      _institute ??= widget.institutes.first;
+    if (widget.requireProgram) {
+      _institute = widget.initialInstitute ??
+          (widget.institutes.isNotEmpty ? widget.institutes.first : null);
     }
   }
 
@@ -3124,33 +3227,49 @@ class _AddProgramDialogState extends State<_AddProgramDialog> {
   }
 
   Future<void> _submit() async {
-    final ic = _newInstitute
-        ? _instCodeCtrl.text.trim().toUpperCase()
-        : (_institute ?? '');
-    final iname = _newInstitute ? _instNameCtrl.text.trim() : '';
-    if (_newInstitute && ic.isEmpty) {
-      setState(() => _error = 'Enter the institute code.');
-      return;
-    }
-    if (_newInstitute && iname.isEmpty) {
-      setState(() => _error = 'Enter the institute name.');
-      return;
-    }
-    if (!_newInstitute && ic.isEmpty) {
-      setState(() => _error = 'Select an institute or add a new one.');
-      return;
-    }
+    final String ic;
+    final String iname;
+    final String pc;
+    final String pn;
 
-    // The program is optional, but it is all-or-nothing: a code with no name (or
-    // a name with no code) is half a program, and writing it as an institute-only
-    // row would silently drop what was typed.
-    final pc = _progCodeCtrl.text.trim().toUpperCase();
-    final pn = _progNameCtrl.text.trim();
-    if (pc.isNotEmpty != pn.isNotEmpty) {
-      setState(() => _error = pc.isEmpty
-          ? 'Enter the program code too.'
-          : 'Enter the program name too.');
-      return;
+    if (widget.requireProgram) {
+      // Program path: the institute is picked from what is already on file, so
+      // only the program is typed — and both of its halves are required.
+      ic = _institute ?? '';
+      if (ic.isEmpty) {
+        setState(() => _error = 'Select an institute.');
+        return;
+      }
+      iname = '';
+      pc = _progCodeCtrl.text.trim().toUpperCase();
+      pn = _progNameCtrl.text.trim();
+      if (pc.isEmpty || pn.isEmpty) {
+        setState(() => _error = 'Enter the program code and name.');
+        return;
+      }
+    } else {
+      // Institute path: code and name are both required. The program stays
+      // optional, but it is all-or-nothing — a code with no name is half a
+      // program, and writing it as an institute-only row would silently drop
+      // what was typed.
+      ic = _instCodeCtrl.text.trim().toUpperCase();
+      iname = _instNameCtrl.text.trim();
+      if (ic.isEmpty) {
+        setState(() => _error = 'Enter the institute code.');
+        return;
+      }
+      if (iname.isEmpty) {
+        setState(() => _error = 'Enter the institute name.');
+        return;
+      }
+      pc = _progCodeCtrl.text.trim().toUpperCase();
+      pn = _progNameCtrl.text.trim();
+      if (pc.isNotEmpty != pn.isNotEmpty) {
+        setState(() => _error = pc.isEmpty
+            ? 'Enter the program code too.'
+            : 'Enter the program name too.');
+        return;
+      }
     }
 
     setState(() {
@@ -3208,14 +3327,20 @@ class _AddProgramDialogState extends State<_AddProgramDialog> {
                         child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text('Add Institute / Program',
-                            style: TextStyle(
+                        Text(
+                            widget.requireProgram
+                                ? 'Add Program'
+                                : 'Add Institute',
+                            style: const TextStyle(
                                 fontSize: 18,
                                 fontWeight: FontWeight.w700,
                                 color: kTextMain)),
-                        const Text(
-                            'An institute on its own, or one with a program',
-                            style: TextStyle(fontSize: 13.5, color: kTextSub)),
+                        Text(
+                            widget.requireProgram
+                                ? 'A new program for an institute on file'
+                                : 'An institute, with an optional first program',
+                            style: const TextStyle(
+                                fontSize: 13.5, color: kTextSub)),
                       ],
                     )),
                     IconButton(
@@ -3227,46 +3352,30 @@ class _AddProgramDialogState extends State<_AddProgramDialog> {
                   const SizedBox(height: 18),
                   const Divider(color: kBorder, height: 1),
                   const SizedBox(height: 16),
-
-                  _labeled('Institute'),
-                  DropdownButtonFormField<String>(
-                    initialValue: _newInstitute ? _kNewInstitute : _institute,
-                    isExpanded: true,
-                    decoration: _ideco('Select institute',
-                        prefixIcon: Icons.account_balance_outlined),
-                    style: const TextStyle(fontSize: 15, color: kTextMain),
-                    items: [
-                      ...widget.institutes.map(
-                          (e) => DropdownMenuItem(value: e, child: Text(e))),
-                      const DropdownMenuItem(
-                        value: _kNewInstitute,
-                        child: Row(children: [
-                          Icon(Icons.add_circle_outline,
-                              size: 17, color: kPrimary),
-                          SizedBox(width: 8),
-                          Text('New institute',
-                              style: TextStyle(
-                                  fontSize: 15,
-                                  color: kPrimary,
-                                  fontWeight: FontWeight.w600)),
-                        ]),
-                      ),
-                    ],
-                    onChanged: (v) => setState(() {
-                      if (v == _kNewInstitute) {
-                        _newInstitute = true;
-                      } else {
-                        _newInstitute = false;
+                  if (widget.requireProgram) ...[
+                    // Program path: the institute is chosen from what is already
+                    // on file, so it is a dropdown and the write attaches the new
+                    // program to it.
+                    _labeled('Institute'),
+                    DropdownButtonFormField<String>(
+                      initialValue: _institute,
+                      isExpanded: true,
+                      decoration: _ideco('Select institute',
+                          prefixIcon: Icons.account_balance_outlined),
+                      style: const TextStyle(fontSize: 15, color: kTextMain),
+                      items: widget.institutes
+                          .map(
+                              (e) => DropdownMenuItem(value: e, child: Text(e)))
+                          .toList(),
+                      onChanged: (v) => setState(() {
                         _institute = v;
-                      }
-                      _error = null;
-                    }),
-                  ),
-
-                  // A brand-new institute needs both a code and a name; an
-                  // existing one is identified by the code alone.
-                  if (_newInstitute) ...[
-                    const SizedBox(height: 14),
+                        _error = null;
+                      }),
+                    ),
+                  ] else ...[
+                    // Institute path: a brand-new institute, so code and name are
+                    // boxes and both are required. There is no "pick an existing
+                    // one" branch — this entry exists to add a new school.
                     _labeled('Institute Code'),
                     TextField(
                       controller: _instCodeCtrl,
@@ -3285,7 +3394,6 @@ class _AddProgramDialogState extends State<_AddProgramDialog> {
                           prefixIcon: Icons.account_balance_outlined),
                     ),
                   ],
-
                   const SizedBox(height: 20),
                   Row(children: [
                     const Text('Program',
@@ -3294,17 +3402,23 @@ class _AddProgramDialogState extends State<_AddProgramDialog> {
                             fontWeight: FontWeight.w600,
                             color: kTextSub)),
                     const SizedBox(width: 6),
+                    // "Optional" is the Institute path's truth. Opened from the
+                    // Program dropdown, the program is the reason the dialog is
+                    // open, so it is required and the badge says so.
                     Container(
                       padding: const EdgeInsets.symmetric(
                           horizontal: 7, vertical: 2),
                       decoration: BoxDecoration(
-                          color: kPrimary.withValues(alpha: 0.1),
+                          color: (widget.requireProgram ? kDanger : kPrimary)
+                              .withValues(alpha: 0.1),
                           borderRadius: BorderRadius.circular(6)),
-                      child: const Text('Optional',
+                      child: Text(
+                          widget.requireProgram ? 'Required' : 'Optional',
                           style: TextStyle(
                               fontSize: 11,
                               fontWeight: FontWeight.w600,
-                              color: kPrimary)),
+                              color:
+                                  widget.requireProgram ? kDanger : kPrimary)),
                     ),
                   ]),
                   const SizedBox(height: 6),
@@ -3331,7 +3445,6 @@ class _AddProgramDialogState extends State<_AddProgramDialog> {
                       ),
                     ),
                   ]),
-
                   if (_error != null) ...[
                     const SizedBox(height: 12),
                     Row(children: [
@@ -3343,7 +3456,6 @@ class _AddProgramDialogState extends State<_AddProgramDialog> {
                                   fontSize: 13, color: kDanger))),
                     ]),
                   ],
-
                   const SizedBox(height: 20),
                   Row(mainAxisAlignment: MainAxisAlignment.end, children: [
                     ElevatedButton.icon(
@@ -3355,7 +3467,7 @@ class _AddProgramDialogState extends State<_AddProgramDialog> {
                               child: CircularProgressIndicator(
                                   strokeWidth: 2, color: Colors.white))
                           : const Icon(Icons.save_outlined, size: 17),
-                      label: Text(_saving ? 'Saving…' : 'Save to database'),
+                      label: Text(_saving ? 'Saving…' : 'Save'),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: kPrimary,
                         foregroundColor: Colors.white,
@@ -3405,9 +3517,297 @@ class _AddProgramDialogState extends State<_AddProgramDialog> {
   }
 }
 
+// ── ADD SCHOOL YEAR & SEMESTER DIALOG ────────────────────────────────────────
+
+/// Starts a new term from the record form.
+///
+/// The start / end year boxes mirror what `academic_periods` stores
+/// ('2025-2026') and the semester dropdown offers exactly `chk_semester`'s three
+/// values, so the row can always be written. On save the term is created **and
+/// made current** through [ReferenceDataService.addAcademicPeriod] with
+/// `makeCurrent`, which also retires the previous term's enrolments — the side
+/// effect the button exists for: the roster and the Clinic Visit lookup read
+/// Active enrolments of the current term, so they show this term only the moment
+/// the save lands.
+class _AddPeriodDialog extends StatefulWidget {
+  const _AddPeriodDialog();
+
+  @override
+  State<_AddPeriodDialog> createState() => _AddPeriodDialogState();
+}
+
+class _AddPeriodDialogState extends State<_AddPeriodDialog> {
+  static const Color kPrimary = AppColors.primary;
+  static const Color kCard = AppColors.surface;
+  static const Color kBorder = AppColors.border;
+  static const Color kTextMain = AppColors.textMain;
+  static const Color kTextSub = AppColors.textSub;
+  static const Color kDanger = AppColors.danger;
+
+  late final TextEditingController _startCtrl;
+  late final TextEditingController _endCtrl;
+  String _semester = kSemesters.first;
+  String? _error;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // Open on the school year after the one being run, which is the term a clerk
+    // usually adds. Falls back to the calendar year when no term exists yet.
+    final currentStart = int.tryParse(kCurrentAcademicYear.split('-').first) ??
+        DateTime.now().year;
+    _startCtrl = TextEditingController(text: '${currentStart + 1}');
+    _endCtrl = TextEditingController(text: '${currentStart + 2}');
+  }
+
+  @override
+  void dispose() {
+    _startCtrl.dispose();
+    _endCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    final start = int.tryParse(_startCtrl.text.trim());
+    if (start == null || start < 2000 || start > 2200) {
+      setState(() => _error = 'Enter a four-digit start year, e.g. 2026.');
+      return;
+    }
+    final end = int.tryParse(_endCtrl.text.trim());
+    if (end == null || end != start + 1) {
+      setState(() => _error =
+          'The end year must be the start year plus one (e.g. 2026 / 2027).');
+      return;
+    }
+
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      // `makeCurrent: true` writes the row to `academic_periods`, flips it to
+      // Active, and retires the outgoing term's enrolments. The roster is **not**
+      // carried forward on purpose: a new term means the previous term's people
+      // leave the active list, which is what the caller asked for.
+      final result = await ReferenceDataService.addAcademicPeriod(
+        yearStart: start,
+        yearEnd: end,
+        semester: _semester,
+        makeCurrent: true,
+      );
+      if (!mounted) return;
+      Navigator.pop(context, result.period);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _error = '$e';
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: kCard,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 440),
+        child: SingleChildScrollView(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(24, 22, 24, 20),
+            child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(children: [
+                    Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                          color: kPrimary.withValues(alpha: 0.1),
+                          borderRadius: BorderRadius.circular(10)),
+                      child: const Icon(Icons.calendar_month_outlined,
+                          color: kPrimary, size: 20),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                        child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('Add School Year & Semester',
+                            style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.w700,
+                                color: kTextMain)),
+                        const Text('Starts a new term',
+                            style: TextStyle(fontSize: 13.5, color: kTextSub)),
+                      ],
+                    )),
+                    IconButton(
+                        onPressed:
+                            _saving ? null : () => Navigator.pop(context),
+                        icon: const Icon(Icons.close_rounded, color: kTextSub),
+                        iconSize: 20),
+                  ]),
+                  const SizedBox(height: 18),
+                  const Divider(color: kBorder, height: 1),
+                  const SizedBox(height: 16),
+                  _labeled('School Year'),
+                  Row(children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _startCtrl,
+                        keyboardType: TextInputType.number,
+                        inputFormatters: [
+                          FilteringTextInputFormatter.digitsOnly,
+                          LengthLimitingTextInputFormatter(4),
+                        ],
+                        style: const TextStyle(fontSize: 15, color: kTextMain),
+                        decoration: _ideco('Start', prefixIcon: Icons.event),
+                      ),
+                    ),
+                    const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 10),
+                      child: Text('–',
+                          style: TextStyle(fontSize: 18, color: kTextSub)),
+                    ),
+                    Expanded(
+                      child: TextField(
+                        controller: _endCtrl,
+                        keyboardType: TextInputType.number,
+                        inputFormatters: [
+                          FilteringTextInputFormatter.digitsOnly,
+                          LengthLimitingTextInputFormatter(4),
+                        ],
+                        onSubmitted: (_) => _submit(),
+                        style: const TextStyle(fontSize: 15, color: kTextMain),
+                        decoration: _ideco('End', prefixIcon: Icons.event),
+                      ),
+                    ),
+                  ]),
+                  const SizedBox(height: 14),
+                  _labeled('Semester'),
+                  DropdownButtonFormField<String>(
+                    initialValue: _semester,
+                    isExpanded: true,
+                    decoration: _ideco('Select semester',
+                        prefixIcon: Icons.school_outlined),
+                    style: const TextStyle(fontSize: 15, color: kTextMain),
+                    items: [
+                      for (final s in kSemesters)
+                        DropdownMenuItem(value: s, child: Text(s)),
+                    ],
+                    onChanged: (v) =>
+                        setState(() => _semester = v ?? _semester),
+                  ),
+                  const SizedBox(height: 14),
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+                    decoration: BoxDecoration(
+                      color: kPrimary.withValues(alpha: 0.06),
+                      borderRadius: BorderRadius.circular(10),
+                      border:
+                          Border.all(color: kPrimary.withValues(alpha: 0.18)),
+                    ),
+                    child: Row(children: [
+                      const Icon(Icons.info_outline, size: 15, color: kPrimary),
+                      const SizedBox(width: 8),
+                      const Expanded(
+                          child: Text(
+                        'This becomes the current term. The previous term\'s '
+                        'records are deactivated, so they no longer load in the '
+                        'roster or in Clinic Visit.',
+                        style: TextStyle(
+                            fontSize: 12.5,
+                            color: kPrimary,
+                            fontWeight: FontWeight.w600),
+                      )),
+                    ]),
+                  ),
+                  if (_error != null) ...[
+                    const SizedBox(height: 12),
+                    Row(children: [
+                      const Icon(Icons.error_outline, size: 15, color: kDanger),
+                      const SizedBox(width: 6),
+                      Expanded(
+                          child: Text(_error!,
+                              style: const TextStyle(
+                                  fontSize: 13, color: kDanger))),
+                    ]),
+                  ],
+                  const SizedBox(height: 20),
+                  Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+                    ElevatedButton.icon(
+                      onPressed: _saving ? null : _submit,
+                      icon: _saving
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2, color: Colors.white))
+                          : const Icon(Icons.save_outlined, size: 17),
+                      label: Text(_saving ? 'Saving…' : 'Save'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: kPrimary,
+                        foregroundColor: Colors.white,
+                        elevation: 0,
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10)),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 20, vertical: 12),
+                      ),
+                    ),
+                  ]),
+                ]),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _labeled(String label) => Padding(
+        padding: const EdgeInsets.only(bottom: 6),
+        child: Text(label,
+            style: const TextStyle(
+                fontSize: 13, fontWeight: FontWeight.w600, color: kTextSub)),
+      );
+
+  InputDecoration _ideco(String hint, {IconData? prefixIcon}) {
+    return InputDecoration(
+      hintText: hint,
+      hintStyle: const TextStyle(color: kTextSub, fontSize: 14.5),
+      filled: true,
+      fillColor: const Color(0xFFFAFCFE),
+      prefixIcon: prefixIcon != null
+          ? Icon(prefixIcon, size: 18, color: kTextSub)
+          : null,
+      isDense: true,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+      border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: kBorder)),
+      enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: kBorder)),
+      focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: kPrimary, width: 1.5)),
+      errorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: kDanger)),
+      focusedErrorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: kDanger, width: 1.5)),
+    );
+  }
+}
+
 /// The Add Department / Office and Add Position dialog.
 ///
-/// One small form: a title, a single name box, and a "Save to database" button.
+/// One small form: a title, a single name box, and a "Save" button.
 /// There is no Cancel button beside the submit — the X in the corner does
 /// exactly that, and having both made one look broken. [onSave] is where the
 /// row is actually written; when it throws (a duplicate, no session, a network
@@ -3551,7 +3951,7 @@ class _AddNamedDialogState extends State<_AddNamedDialog> {
                             child: CircularProgressIndicator(
                                 strokeWidth: 2, color: Colors.white))
                         : const Icon(Icons.save_outlined, size: 17),
-                    label: Text(_saving ? 'Saving…' : 'Save to database'),
+                    label: Text(_saving ? 'Saving…' : 'Save'),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: kPrimary,
                       foregroundColor: Colors.white,

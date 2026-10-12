@@ -750,16 +750,19 @@ class ReferenceDataService {
   /// so a term added twice comes back as the same `AP-` id rather than as an
   /// error.
   ///
-  /// Set [makeCurrent] to make it the term being run (the `set_active_period`
-  /// RPC, which flips the previous one to Inactive), and [carryOverRoster] to
-  /// copy everybody from the term being run into the new one
-  /// (`roll_forward_period`).
+  /// Set [makeCurrent] to make it the term being run. The previous Active term
+  /// is flipped to Inactive *and* its enrolments are retired, so the roster and
+  /// the Clinic Visit lookup — both of which read Active enrolments of the
+  /// current term — show the new term only. Set [carryOverRoster] to copy
+  /// everybody from the term being run into the new one as Active instead of
+  /// leaving them behind.
   ///
   /// [carryOverRoster] is what makes a new term usable in one action instead of
   /// re-typing the whole roster: every Active record of the outgoing term gets
   /// an Active copy under the incoming period, so nobody appears twice and
   /// nobody disappears. Returns the number of rows copied.
-  static Future<(AcademicPeriodOption period, int carried)> addAcademicPeriod({
+  static Future<({AcademicPeriodOption period, int carried})>
+      addAcademicPeriod({
     required int yearStart,
     required int yearEnd,
     required String semester,
@@ -828,6 +831,28 @@ class ReferenceDataService {
     // leave the catalog showing the list from before they pressed Save.
     ReferenceException? carryFailure;
 
+    // Switching the term also retires the outgoing term's enrolments, exactly as
+    // [setActivePeriod] does. `_setActivePeriodRow` only moves the
+    // `academic_periods` flag; without this the previous term's `Active`
+    // enrolments stayed Active — hidden while the roster filters on the new term,
+    // but still returned by anything that looks at the old term (the Archive
+    // counts Active enrolments).
+    //
+    // The carry-over branch below handles this itself and must run *after* its
+    // copy reads the outgoing term's Active rows, so this only covers the
+    // no-carry path. `previousActive` was captured before the flip.
+    if (makeCurrent &&
+        !carryOverRoster &&
+        previousActive != null &&
+        previousActive.id != period.id) {
+      try {
+        await _retirePeriod(previousActive.id);
+      } catch (e) {
+        carryFailure = ReferenceException(
+            _explain(e, 'Could not close the previous term.'));
+      }
+    }
+
     if (carryOverRoster) {
       final from = previousActive;
       if (from == null) {
@@ -887,7 +912,10 @@ class ReferenceDataService {
 
     if (carryFailure != null) throw carryFailure;
 
-    return (ReferenceCatalog.periodById(period.id) ?? period, carried);
+    return (
+      period: ReferenceCatalog.periodById(period.id) ?? period,
+      carried: carried,
+    );
   }
 
   /// Flips [periodId] to be the term being run and closes the term it replaced.

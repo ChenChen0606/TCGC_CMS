@@ -728,7 +728,7 @@ class _ClinicVisitScreenState extends State<ClinicVisitScreen> {
     }
 
     if (!mounted) return;
-    _toast('Consultation saved by $_currentUserName.', kPrimary);
+    _toast('Saved Record', kPrimary);
 
     _resetVisit();
   }
@@ -754,7 +754,7 @@ class _ClinicVisitScreenState extends State<ClinicVisitScreen> {
           Icon(editing ? Icons.edit_outlined : Icons.check_circle_outline,
               color: kPrimary, size: 22),
           const SizedBox(width: 8),
-          Text(editing ? "Update Visit" : "Confirm Visit"),
+          Text(editing ? "Update Record" : "Confirm Record"),
         ]),
         content: SizedBox(
           width: 380,
@@ -783,15 +783,7 @@ class _ClinicVisitScreenState extends State<ClinicVisitScreen> {
               const SizedBox(height: 4),
               VisitReviewRow(
                   editing ? "Updated by" : "Recorded by", _currentUserName),
-              if (needsProcedure) ...[
-                const SizedBox(height: 12),
-                _noteBanner(
-                  kWarning,
-                  Icons.info_outline,
-                  'This complaint ("$complaint") needs a procedure on record. '
-                  "A pending procedure will be logged against this visit.",
-                ),
-              ],
+              // removed procedure note per request
             ],
           ),
         ),
@@ -3716,6 +3708,7 @@ class _ClinicVisitScreenState extends State<ClinicVisitScreen> {
         content: Text(message),
         backgroundColor: color,
         behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 1),
         // 52, which is the pinned button bar (40) and the gutter under it (10).
         //
         // A toast that lands on top of the buttons is a toast that stops the
