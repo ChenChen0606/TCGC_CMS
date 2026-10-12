@@ -39,6 +39,11 @@ migrate_working_dir/
 # Supabase local CLI cache
 supabase/.temp/
 
+# Local-only (intentionally not published)
+AGENTS.md
+/schema*.sql
+/supabase/migrations/
+
 # Symbolication related
 app.*.symbols
 
