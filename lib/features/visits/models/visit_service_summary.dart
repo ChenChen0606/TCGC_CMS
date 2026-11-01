@@ -1,0 +1,190 @@
+import 'package:clinicmanagementsystem/features/visits/models/visit_details.dart';
+import 'package:clinicmanagementsystem/features/visits/models/visit_service_forms.dart';
+import 'package:clinicmanagementsystem/features/vitals/models/vitals.dart';
+
+class SummaryRow {
+  const SummaryRow(this.label, this.value);
+
+  final String label;
+  final String value;
+}
+
+class SummarySection {
+  const SummarySection(this.title, this.rows);
+
+  final String title;
+  final List<SummaryRow> rows;
+}
+
+List<SummarySection> serviceSummary(ServiceDraft draft, VisitVitals vitals,
+    {bool canSeeRestricted = true}) {
+  final sections = <SummarySection>[];
+
+  final hideRestricted = !canSeeRestricted &&
+      draft.serviceId == 'health_counselling' &&
+      counsellingPrivacyLevel(draft.data) == 'Restricted';
+  const restrictedKeys = {
+    'reason',
+    'student_response',
+    'concern_signs',
+    'notes',
+  };
+
+  for (final slide in draft.spec.slides) {
+    if (slide.custom?.id == 'form_review') continue;
+    final rows = <SummaryRow>[];
+    for (final f in slide.fields) {
+      if (f.kind == ServiceFieldKind.sharedVitals ||
+          f.kind == ServiceFieldKind.vitalsCard ||
+          f.kind == ServiceFieldKind.linkServiceCard ||
+          f.kind == ServiceFieldKind.notice) {
+        continue;
+      }
+
+      if (_foldedOtherKeys(draft).contains(f.key)) continue;
+      if (hideRestricted && restrictedKeys.contains(f.key)) continue;
+      final value = summaryValue(draft, f);
+      if (value.trim().isEmpty) continue;
+      rows.add(SummaryRow(f.label, value));
+    }
+    if (rows.isNotEmpty) sections.add(SummarySection(slide.title, rows));
+  }
+
+  if (draft.serviceId == 'health_counselling') {
+    final reasons = counsellingReferralReasons(draft.data);
+    if (reasons.isNotEmpty) {
+      sections.add(SummarySection('Referral', [
+        SummaryRow(
+          'Referral advised',
+          draft.spec.referralTitle ?? 'Refer to doctor / hospital.',
+        ),
+        SummaryRow('Reason', reasons.join(' · ')),
+      ]));
+    }
+  }
+
+  if (draft.serviceId == 'wound_dressing') {
+    final reasons = woundReferralReasons(draft.data, temperature: vitals.tempC);
+    if (reasons.isNotEmpty) {
+      sections.add(SummarySection('Referral', [
+        const SummaryRow(
+          'Referral advised',
+          'Refer to doctor / RHU / hospital. May need suturing, tetanus or '
+              'further treatment.',
+        ),
+        SummaryRow('Reason', reasons.join(' · ')),
+      ]));
+    }
+  }
+
+  if (draft.serviceId == 'medicine_consultation') {
+    final reasons = consultationReferralReasons(draft.data, vitals);
+    if (reasons.isNotEmpty) {
+      sections.add(SummarySection('Referral', [
+        const SummaryRow(
+          'Referral advised',
+          'Referral / additional service needed. Check disposition, guardian, '
+              'and referral service.',
+        ),
+        SummaryRow('Reason', reasons.join(' · ')),
+      ]));
+    }
+  }
+
+  if (draft.medicines.isNotEmpty) {
+    sections.add(SummarySection('Medicines', [
+      for (final m in draft.medicines)
+        SummaryRow(m.name, m.detail.isEmpty ? '—' : m.detail),
+    ]));
+  }
+
+  final wantsVitals = draft.spec.slides.any((s) => s.fields.any((f) =>
+      f.kind == ServiceFieldKind.sharedVitals ||
+      f.kind == ServiceFieldKind.vitalsCard ||
+      f.vital != null));
+  if (wantsVitals) {
+    final readings = <SummaryRow>[
+      for (final r in [
+        vitals.bloodPressure,
+        vitals.heartRateReading,
+        vitals.respRateReading,
+        vitals.tempReading,
+        vitals.o2Reading,
+        vitals.bmiReading,
+      ])
+        if (r != null) SummaryRow(r.label, r.display),
+    ];
+    if (readings.isNotEmpty) {
+      sections.add(SummarySection('Visit Vitals', readings));
+    }
+  }
+
+  return sections;
+}
+
+String summaryValue(ServiceDraft draft, ServiceField field) {
+  switch (field.kind) {
+    case ServiceFieldKind.checkboxes:
+    case ServiceFieldKind.chips:
+    case ServiceFieldKind.multiselect:
+    case ServiceFieldKind.inventoryPick:
+      return _joinedChoices(draft, field);
+    case ServiceFieldKind.number:
+      final v = draft.text(field.key).trim();
+      if (v.isEmpty) return '';
+      final unit = field.unit?.trim() ?? '';
+      return unit.isEmpty ? v : '$v $unit';
+    default:
+      final raw = draft.text(field.key).trim();
+
+      if (raw == 'Other' &&
+          _foldedOtherKeys(draft).contains('${field.key}_other')) {
+        final other = draft.text('${field.key}_other').trim();
+        if (other.isNotEmpty) return other;
+      }
+      return raw;
+  }
+}
+
+String _joinedChoices(ServiceDraft draft, ServiceField field) {
+  final chosen = draft.chosen(field.key);
+  final otherKey = '${field.key}_other';
+  if (!_foldedOtherKeys(draft).contains(otherKey)) {
+    return chosen.join(' · ');
+  }
+  final other = draft.text(otherKey).trim();
+  if (other.isEmpty) return chosen.join(' · ');
+  return [
+    for (final c in chosen)
+      if (c == 'Other') other else c,
+  ].join(' · ');
+}
+
+Set<String> _foldedOtherKeys(ServiceDraft draft) {
+  const folded = <String, List<String>>{
+    'vital_signs': ['action_taken'],
+    'prenatal': ['danger_signs', 'action_taken', 'given_this_visit'],
+    'wound_dressing': [
+      'cleaning_performed',
+      'dressing_applied',
+      'wound_condition',
+      'assessment',
+      'action_taken',
+      'injury_timing',
+      'wound_location',
+      'wound_type',
+      'burn_degree',
+      'bleeding',
+    ],
+    'first_aid_treatment': [
+      'incident',
+      'incident_place',
+      'body_part',
+      'dressing_material',
+      'recommended_service',
+    ],
+    'health_counselling': ['referral_service'],
+  };
+  final lists = folded[draft.serviceId] ?? const <String>[];
+  return {for (final k in lists) '${k}_other'};
+}
