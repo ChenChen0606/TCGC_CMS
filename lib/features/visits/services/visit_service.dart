@@ -3,6 +3,7 @@ import 'package:clinicmanagementsystem/core/services/data_tracker.dart';
 import 'package:clinicmanagementsystem/core/services/time_service.dart';
 import 'package:clinicmanagementsystem/features/patients/services/patient_service.dart';
 import 'package:clinicmanagementsystem/core/config/supabase_config.dart';
+import 'package:clinicmanagementsystem/core/services/reference_data_service.dart';
 
 class Visit {
   final String? id;
@@ -23,6 +24,7 @@ class Visit {
   final String? recordedBy;
 
   final DateTime? outTime;
+  final String? academicPeriodId;
 
   const Visit({
     this.id,
@@ -42,6 +44,7 @@ class Visit {
     this.updatedAt,
     this.recordedBy,
     this.outTime,
+    this.academicPeriodId,
   });
 
   factory Visit.fromSupabase(Map<String, dynamic> row) {
@@ -66,6 +69,7 @@ class Visit {
       updatedAt: _parseTs(row['updated_at']),
       recordedBy: row['recorded_by'] as String? ?? row['created_by'] as String?,
       outTime: _parseTs(row['time_out']),
+      academicPeriodId: row['academic_period_id'] as String?,
     );
   }
 
@@ -127,6 +131,10 @@ class Visit {
       "complaint": reasonForVisit.isNotEmpty ? reasonForVisit : complaint,
       "medicine": 'None',
       "qty": '—',
+      "periodId": academicPeriodId ?? '',
+      "visitYear": ReferenceCatalog.periodById(academicPeriodId)?.acadYear ?? '',
+      "visitSemester":
+          ReferenceCatalog.periodById(academicPeriodId)?.semester ?? '',      
       "createdBy": by(recordedBy),
       "createdAt": ts(created),
       "updatedBy": by(recordedBy),
@@ -221,6 +229,7 @@ class VisitService {
         updatedAt: visit.updatedAt,
         recordedBy: visit.recordedBy,
         outTime: out,
+        academicPeriodId: visit.academicPeriodId,
       ).toBookletMap(userNames: userNames);
     }).toList();
   }
@@ -258,6 +267,7 @@ class VisitService {
     DateTime? visitDate,
     String visitTime = '',
     DateTime? timeOut,
+    String? academicPeriodId,
     String? reasonForVisit,
     String? recordedBy,
   }) async {
@@ -295,6 +305,8 @@ class VisitService {
           'reason_for_visit': reason.isNotEmpty ? reason : complaint,
           'status': 'Completed',
           'created_by': createdBy,
+          if (academicPeriodId != null && academicPeriodId.isNotEmpty)
+            'academic_period_id': academicPeriodId,
         })
         .select()
         .single();
@@ -304,15 +316,32 @@ class VisitService {
     return persisted;
   }
 
-  static Future<void> update(
+    static Future<void> update(
     dynamic id, {
     required String complaint,
+    String? academicPeriodId,
   }) async {
     final sid = id.toString();
     await supabaseClient.from('clinic_visits').update({
       'reason_for_visit': complaint,
+      if (academicPeriodId != null && academicPeriodId.isNotEmpty)
+        'academic_period_id': academicPeriodId,
     }).eq('visit_id', sid);
     DataTracker.bump();
+  }
+
+  static Future<String?> periodIdOf(String visitId) async {
+    try {
+      final row = await supabaseClient
+          .from('clinic_visits')
+          .select('academic_period_id')
+          .eq('visit_id', visitId)
+          .maybeSingle();
+      final v = '${row?['academic_period_id'] ?? ''}'.trim();
+      return v.isEmpty ? null : v;
+    } catch (_) {
+      return null;
+    }
   }
 
   static Future<void> delete(dynamic id) async {

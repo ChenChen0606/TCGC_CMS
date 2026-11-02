@@ -1170,7 +1170,6 @@ const List<String> kVitalActions = [
   'Rest advised',
   'Rested in clinic',
   'Recheck vital signs later',
-  'Referred to clinic physician',
   'Referred to hospital / emergency care',
   'Guardian / companion informed',
   'Sent home',
@@ -1178,7 +1177,7 @@ const List<String> kVitalActions = [
   'Other',
 ];
 
-const List<String> kReferralActions = ['Referred to'];
+const List<String> kReferralActions = ['Referred to hospital / emergency care'];
 
 const String kVitalsSelectedKey = 'vitals_selected';
 const String kSelectAllLabel = 'Select All';
@@ -1188,7 +1187,6 @@ const List<String> kVitalChoices = [
   'Temperature',
   'Pulse',
   'Respiratory Rate',
-  'Weight / Height',
   'O₂ Saturation',
 ];
 
@@ -1197,7 +1195,6 @@ const Map<String, List<String>> kVitalChoiceKeys = {
   'Temperature': ['temp_c', 'method', 'temp_assessment'],
   'Pulse': ['pulse_bpm', 'pulse_assessment'],
   'Respiratory Rate': ['resp_rate', 'resp_assessment'],
-  'Weight / Height': ['height_cm', 'weight_kg', 'bmi', 'bmi_class'],
   'O₂ Saturation': ['o2_sat', 'spo2_assessment'],
 };
 
@@ -1206,7 +1203,6 @@ const Map<String, List<VitalField>> kVitalChoiceFields = {
   'Temperature': [VitalField.temperature],
   'Pulse': [VitalField.heartRate],
   'Respiratory Rate': [VitalField.respRate],
-  'Weight / Height': [VitalField.heightCm, VitalField.weightKg],
   'O₂ Saturation': [VitalField.o2Sat],
 };
 
@@ -2942,8 +2938,6 @@ class VisitServiceForms {
             FieldGroup(kVitalChoiceKeys['Pulse']!, title: 'Pulse'),
             FieldGroup(kVitalChoiceKeys['Respiratory Rate']!,
                 title: 'Respiratory Rate'),
-            FieldGroup(kVitalChoiceKeys['Weight / Height']!,
-                title: 'Weight / Height'),
             FieldGroup(kVitalChoiceKeys['O₂ Saturation']!,
                 title: 'Oxygen Saturation'),
           ],
@@ -3098,48 +3092,7 @@ class VisitServiceForms {
               shownWhenValues: const ['Respiratory Rate'],
               note: 'Worked out from the respiratory rate entered above.',
             ),
-            // ---- Weight / height ----
-            ServiceField(
-              key: 'height_cm',
-              label: 'Height',
-              kind: ServiceFieldKind.number,
-              unit: 'cm',
-              vital: VitalField.heightCm,
-              required: true,
-              width: FieldWidth.half,
-              shownWhenKey: kVitalsSelectedKey,
-              shownWhenValues: const ['Weight / Height'],
-              validate: _vitalDecimal(30, 250),
-            ),
-            ServiceField(
-              key: 'weight_kg',
-              label: 'Weight',
-              kind: ServiceFieldKind.number,
-              unit: 'kg',
-              vital: VitalField.weightKg,
-              required: true,
-              width: FieldWidth.half,
-              shownWhenKey: kVitalsSelectedKey,
-              shownWhenValues: const ['Weight / Height'],
-              validate: _vitalDecimal(2, 400),
-            ),
-            ServiceField(
-              key: 'bmi',
-              label: 'BMI',
-              kind: ServiceFieldKind.readOnly,
-              width: FieldWidth.half,
-              shownWhenKey: kVitalsSelectedKey,
-              shownWhenValues: const ['Weight / Height'],
-              note: 'Worked out from the height and weight above.',
-            ),
-            ServiceField(
-              key: 'bmi_class',
-              label: 'BMI Classification',
-              kind: ServiceFieldKind.readOnly,
-              width: FieldWidth.half,
-              shownWhenKey: kVitalsSelectedKey,
-              shownWhenValues: const ['Weight / Height'],
-            ),
+           
             // ---- Oxygen saturation ----
             ServiceField(
               key: 'o2_sat',
@@ -3165,31 +3118,7 @@ class VisitServiceForms {
             ),
           ],
         ),
-        ServiceSlide(
-          title: 'Symptoms & Remarks',
-          fields: [
-            ServiceField(
-              key: 'symptoms',
-              label: 'Symptoms / Complaints',
-              kind: ServiceFieldKind.multiline,
-              note: 'What the person reports alongside the readings.',
-            ),
-            ServiceField(
-              key: 'assessment',
-              label: 'Assessment / Observations',
-              kind: ServiceFieldKind.multiline,
-              note:
-                  'Notes against the readings — what stands out on this check.',
-            ),
-            ServiceField(
-              key: 'follow_up',
-              label: 'Follow-up / Recommendation',
-              kind: ServiceFieldKind.multiline,
-              note: 'What happens next, if anything.',
-            ),
-            notes(),
-          ],
-        ),
+        
         ServiceSlide(
           title: 'Action & Referral',
           fields: [
@@ -3214,10 +3143,20 @@ class VisitServiceForms {
               key: 'referral_reason',
               label: 'Reason for Referral',
               kind: ServiceFieldKind.multiline,
-              note: 'Why the person is being referred, and to whom.',
+              required: true,
+              maxChars: 300,
+              note: 'Why the person is being referred.',
               shownWhenKey: 'action_taken',
               shownWhenValues: kReferralActions,
-              shownWhen: FieldCondition.startsWith,
+            ),
+            ServiceField(
+              key: 'referred_to',
+              label: 'Referred to (where)',
+              kind: ServiceFieldKind.text,
+              required: true,
+              hint: 'e.g. Tangub City District Hospital',
+              shownWhenKey: 'action_taken',
+              shownWhenValues: kReferralActions,
             ),
           ],
         ),

@@ -34,6 +34,7 @@ List<SummarySection> serviceSummary(ServiceDraft draft, VisitVitals vitals,
     if (slide.custom?.id == 'form_review') continue;
     final rows = <SummaryRow>[];
     for (final f in slide.fields) {
+      if (f.key == kVitalsSelectedKey) continue;
       if (f.kind == ServiceFieldKind.sharedVitals ||
           f.kind == ServiceFieldKind.vitalsCard ||
           f.kind == ServiceFieldKind.linkServiceCard ||
@@ -104,13 +105,13 @@ List<SummarySection> serviceSummary(ServiceDraft draft, VisitVitals vitals,
       f.vital != null));
   if (wantsVitals) {
     final readings = <SummaryRow>[
-      for (final r in [
+            for (final r in [
         vitals.bloodPressure,
         vitals.heartRateReading,
         vitals.respRateReading,
         vitals.tempReading,
         vitals.o2Reading,
-        vitals.bmiReading,
+        if (draft.serviceId != 'vital_signs') vitals.bmiReading,
       ])
         if (r != null) SummaryRow(r.label, r.display),
     ];

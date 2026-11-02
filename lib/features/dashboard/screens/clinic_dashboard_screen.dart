@@ -1,4 +1,4 @@
-import 'package:clinicmanagementsystem/features/archive/screens/archive_screen.dart';
+
 import 'package:flutter/material.dart';
 import 'dart:async';
 import 'package:intl/intl.dart';
@@ -43,7 +43,7 @@ class _ClinicDashboardState extends State<ClinicDashboard> {
 
     if (browserHistoryEnabled) {
       initTabHistory((index) {
-        if (index < 0 || index > _archiveIndex) return;
+        if (index < 0 || index > _lastTabIndex) return;
         if (mounted) setState(() => _selectedIndex = index);
       });
     }
@@ -57,7 +57,7 @@ class _ClinicDashboardState extends State<ClinicDashboard> {
 
   bool get _isHead => widget.userRole == 'Clinic Head';
 
-  int get _archiveIndex => 8;
+  int get _lastTabIndex => 7;
 
   List<Widget> get _pages => [
         DashboardOverview(
@@ -81,7 +81,7 @@ class _ClinicDashboardState extends State<ClinicDashboard> {
           userName: widget.userName,
           userUsername: widget.userUsername,
         ),
-        ArchiveScreen(isActive: _selectedIndex == _archiveIndex),
+        
       ];
 
   void _onItemTapped(int index) {
@@ -172,7 +172,7 @@ class _ClinicDashboardState extends State<ClinicDashboard> {
                   _menuItem(7, "User Accounts", Icons.people_alt_rounded),
                 ] else
                   _menuItem(7, "User Account", Icons.manage_accounts_outlined),
-                _menuItem(_archiveIndex, "Archive", Icons.archive_outlined),
+               
               ],
             ),
           ),

@@ -17,7 +17,6 @@ import 'package:clinicmanagementsystem/features/visits/models/clinic_purposes.da
 import 'package:clinicmanagementsystem/core/theme/app_colors.dart';
 import 'package:clinicmanagementsystem/features/patients/models/individual_record_data.dart';
 import 'package:clinicmanagementsystem/features/visits/screens/clinic_visit_step_three.dart';
-import 'package:clinicmanagementsystem/features/records/widgets/record_drawer.dart';
 import 'package:clinicmanagementsystem/features/visits/widgets/visit_review_card.dart';
 
 class ClinicVisitScreen extends StatefulWidget {
@@ -101,6 +100,7 @@ class _ClinicVisitScreenState extends State<ClinicVisitScreen> {
   final TextEditingController _reasonForVisitCtrl = TextEditingController();
 
   ClinicProfile? _visitor;
+  String? _academicPeriodId;
 
   String? _patientUuid;
 
@@ -154,8 +154,16 @@ class _ClinicVisitScreenState extends State<ClinicVisitScreen> {
     super.initState();
     _syncServerClock();     //???
     _loadDirectory();
+
+    _academicPeriodId = ReferenceCatalog.currentPeriod?.id;
+    ReferenceCatalog.loadQuietly();
     
-    if (_isEditing) _seedEditMode();
+    if (_isEditing) {
+      _seedEditMode();
+      VisitService.periodIdOf(widget.editVisitId!).then((id) {
+        if (mounted && id != null) setState(() => _academicPeriodId = id);
+      });
+    }
 
     _directoryListener = () {
       if (!mounted || _hydrating) return;
@@ -170,8 +178,11 @@ class _ClinicVisitScreenState extends State<ClinicVisitScreen> {
     DataTracker.listen(_dataListener!);
   }
 
-  void _catalogListener() {
-    if (mounted) setState(() {});
+    void _catalogListener() {
+    if (!mounted) return;
+    setState(() {
+      _academicPeriodId ??= ReferenceCatalog.currentPeriod?.id;
+    });
   }
 
   @override
@@ -464,6 +475,7 @@ class _ClinicVisitScreenState extends State<ClinicVisitScreen> {
         await VisitService.update(
           widget.editVisitId!,
           complaint: updateReason,
+          academicPeriodId: _academicPeriodId,
         );
         await _saveStepThreeToServer(widget.editVisitId!);
       } catch (e) {
@@ -506,6 +518,7 @@ class _ClinicVisitScreenState extends State<ClinicVisitScreen> {
         visitDate: timeInAt,
         visitTime: VisitTimes.clock(timeInAt),
         timeOut: timeOutAt,
+        academicPeriodId: _academicPeriodId,
       );
     } catch (e) {
       if (!mounted) return;
@@ -594,6 +607,7 @@ class _ClinicVisitScreenState extends State<ClinicVisitScreen> {
 
   void _resetVisit() {
     setState(() {
+      _academicPeriodId = ReferenceCatalog.currentPeriod?.id;
       _step = 0;
       _visitor = null;
       _patientUuid = null;
@@ -1707,16 +1721,7 @@ class _ClinicVisitScreenState extends State<ClinicVisitScreen> {
                 ),
               ),
               const SizedBox(width: 6),
-              IconButton(
-                key: const ValueKey('view_full_record'),
-                onPressed: _showRecordDrawer,
-                icon: const Icon(Icons.menu_book_outlined, size: 15),
-                color: AppColors.primaryDark,
-                tooltip: 'View Full Record',
-                visualDensity: VisualDensity.compact,
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
-              ),
+             
               Container(
                 padding:
                     const EdgeInsets.symmetric(horizontal: 6, vertical: 2.5),
@@ -1757,38 +1762,10 @@ class _ClinicVisitScreenState extends State<ClinicVisitScreen> {
     );
   }
 
-  void _showRecordDrawer() {
-    final v = _visitor;
-    if (v == null) return;
-    showGeneralDialog(
-      context: context,
-      barrierDismissible: true,
-      barrierLabel: 'Close record',
-      barrierColor: AppColors.textDark.withValues(alpha: 0.42),
-      transitionDuration: const Duration(milliseconds: 180),
-      pageBuilder: (_, __, ___) => RecordDrawer(
-        profile: v,
-        controller: _detailsFor(),
-        history: const [],
-        historyFor: () => VisitDetailsService.historyFor(v.id),
-        onOpenService: (id, slide) {
-          Navigator.of(context).pop();
+  
 
-          _toast(
-              'Open ${_labelOf(id)} on the next step to record it.', kWarning);
-        },
-      ),
-      transitionBuilder: (_, anim, __, child) => SlideTransition(
-        position: Tween(begin: const Offset(1, 0), end: Offset.zero).animate(
-          CurvedAnimation(parent: anim, curve: Curves.easeOutCubic),
-        ),
-        child: child,
-      ),
-    );
-  }
-
-  String _labelOf(String serviceId) =>
-      ClinicPurposes.byId(serviceId)?.label ?? serviceId;
+ // String _labelOf(String serviceId) =>
+    //  ClinicPurposes.byId(serviceId)?.label ?? serviceId;
 
   Widget _assistBanner() {
     return _tealBanner(
@@ -1915,6 +1892,8 @@ class _ClinicVisitScreenState extends State<ClinicVisitScreen> {
           ],
           _timeRow(),
           const SizedBox(height: 12),
+           _periodPicker(),
+          const SizedBox(height: 12),
           const Divider(color: kBorder, height: 1),
           const SizedBox(height: 12),
           _eyebrow(Icons.checklist_rounded, 'Selected Services ($count)'),
@@ -1972,6 +1951,60 @@ class _ClinicVisitScreenState extends State<ClinicVisitScreen> {
           ]),
         ],
       ),
+    );
+  }
+    Widget _periodPicker() {
+    final periods = ReferenceCatalog.periodsNewestFirst;
+    final currentId = ReferenceCatalog.currentPeriod?.id;
+    final safe = periods.any((p) => p.id == _academicPeriodId)
+        ? _academicPeriodId
+        : null;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text('School Year · Semester', style: kFieldLabelStyle),
+        const SizedBox(height: 6),
+        DropdownButtonFormField<String>(
+          key: ValueKey('period_$safe'),
+          initialValue: safe,
+          isExpanded: true,
+          hint: Text(
+            periods.isEmpty ? 'No school year on file' : 'Choose school year',
+            style: const TextStyle(fontSize: 12.5, color: kTextMuted),
+          ),
+          items: [
+            for (final p in periods)
+              DropdownMenuItem(
+                value: p.id,
+                child: Text(
+                  p.id == currentId ? '${p.label}  (Current)' : p.label,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 12.5, color: kTextMain),
+                ),
+              ),
+          ],
+          onChanged: periods.isEmpty
+              ? null
+              : (v) => setState(() => _academicPeriodId = v),
+          icon: const Icon(Icons.expand_more_rounded, size: 18),
+          decoration: InputDecoration(
+            isDense: true,
+            filled: true,
+            fillColor: kFieldFill,
+            contentPadding:
+                const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+            border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+                borderSide: const BorderSide(color: kBorder)),
+            enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+                borderSide: const BorderSide(color: kBorder)),
+            focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+                borderSide: const BorderSide(color: kPrimary, width: 1.5)),
+          ),
+        ),
+      ],
     );
   }
   Widget _timeRow() {

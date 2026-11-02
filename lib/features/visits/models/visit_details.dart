@@ -595,12 +595,8 @@ class VisitDetailsController extends ChangeNotifier {
 
     for (final entry in kVitalChoiceKeys.entries) {
       if (chosen.contains(entry.key)) continue;
-      // The BMI service shares height/weight, so don't wipe them from there.
-      final keepVitals = entry.key == 'Weight / Height' && has('bpi');
-      if (!keepVitals) {
-        for (final f in kVitalChoiceFields[entry.key] ?? const <VitalField>[]) {
-          setVitalRaw(f, null);
-        }
+      for (final f in kVitalChoiceFields[entry.key] ?? const <VitalField>[]) {
+        setVitalRaw(f, null);
       }
       for (final k in entry.value) {
         d.data.remove(k);

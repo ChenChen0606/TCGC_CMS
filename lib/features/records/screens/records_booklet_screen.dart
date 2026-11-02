@@ -11,6 +11,8 @@ import 'package:clinicmanagementsystem/core/theme/app_colors.dart';
 
 import 'package:clinicmanagementsystem/features/patients/models/patient_directory.dart';
 import 'package:clinicmanagementsystem/features/visits/models/visit_details.dart';
+import 'package:clinicmanagementsystem/features/visits/models/visit_service_forms.dart';
+import 'package:clinicmanagementsystem/features/vitals/models/vitals.dart';
 import 'package:clinicmanagementsystem/features/certificates/models/certificate_engine.dart';
 import 'package:clinicmanagementsystem/features/account/services/account_service.dart';
 import 'package:clinicmanagementsystem/core/services/data_tracker.dart';
@@ -95,6 +97,7 @@ class _PrintCriteria {
   final DateTime? issuedOn;
   final String signatory;
 }
+typedef _DayGroup = List<Map<String, String>>;
 
 class _VisitState {
   const _VisitState(this.label, this.color);
@@ -132,13 +135,13 @@ class RecordsBookletState extends State<RecordsBooklet> {
   static const String _currentUser = "Anna Gonzaga";
 
   static const List<String> _dateFilterModes = [
-    'All',
     'Today',
+    'All',
     'This Week',
     'This Month',
-    'Year',
     'Pick Date',
     'Date Range',
+    'School Year'
   ];
 
   String selectedFilter = "Today";
@@ -146,9 +149,9 @@ class RecordsBookletState extends State<RecordsBooklet> {
   DateTimeRange? selectedRange;
 
   int? selectedYear;
-
+  String selectedAcadYear = '';
+  String selectedSemester = '';
   String searchQuery = "";
-
   String selectedInstitute = "";
   String selectedProgram = "";
 
@@ -324,8 +327,12 @@ class RecordsBookletState extends State<RecordsBooklet> {
       r["dept"] = pick(facts["institute"] ?? '', r["dept"] ?? '');
     }
 
-    r["academicYear"] = facts["academicYear"] ?? r["academicYear"] ?? '';
-    r["semester"] = facts["semester"] ?? r["semester"] ?? '';
+    r["academicYear"] = (r["visitYear"] ?? '').isNotEmpty
+        ? r["visitYear"]!
+        : (facts["academicYear"] ?? r["academicYear"] ?? '');
+    r["semester"] = (r["visitSemester"] ?? '').isNotEmpty
+        ? r["visitSemester"]!
+        : (facts["semester"] ?? r["semester"] ?? '');
   }
 
   String _describeReadFailure(Object e) {
@@ -379,6 +386,21 @@ class RecordsBookletState extends State<RecordsBooklet> {
           .where((e) => e.values.join(" ").toLowerCase().contains(searchQuery))
           .toList();
     }
+
+    if (selectedFilter == 'School Year') {
+      filtered = filtered.where((e) {
+        if (selectedAcadYear.isNotEmpty &&
+            (e["visitYear"] ?? '') != selectedAcadYear) {
+          return false;
+        }
+        if (selectedSemester.isNotEmpty &&
+            (e["visitSemester"] ?? '') != selectedSemester) {
+          return false;
+        }
+        return true;
+      }).toList();
+    }
+
     final DateTimeRange? window = _activeWindow();
     if (window != null) {
       final DateTime start = window.start;
@@ -430,14 +452,71 @@ class RecordsBookletState extends State<RecordsBooklet> {
     }
   }
 
-  Map<String, int> _getVisitSummary({String? institute}) {
-    final all = _getFilteredRecords(institute: institute);
+    Map<String, int> _getVisitSummary({String? institute}) {
+    final all = _groupByDay(_getFilteredRecords(institute: institute));
+    int c(String t) => all.where((g) => g.first["type"] == t).length;
     return {
       "all": all.length,
-      "student": all.where((e) => e["type"] == "Student").length,
-      "faculty": all.where((e) => e["type"] == "Faculty").length,
-      "staff": all.where((e) => e["type"] == "Staff").length,
+      "student": c("Student"),
+      "faculty": c("Faculty"),
+      "staff": c("Staff"),
     };
+  }
+
+  List<_DayGroup> _groupByDay(List<Map<String, String>> records) {
+    final map = <String, _DayGroup>{};
+    for (final r in records) {
+      final key = '${_idOfRecord(r)}|${(r["date"] ?? '').trim()}';
+      map.putIfAbsent(key, () => []).add(r);
+    }
+    final groups = map.values.toList();
+    for (final g in groups) {
+      g.sort((a, b) =>
+          _timeKey(a["time"] ?? '').compareTo(_timeKey(b["time"] ?? '')));
+    }
+    return groups;
+  }
+
+  List<String> _mergedServiceNames(_DayGroup g) {
+    final seen = <String>{};
+    final out = <String>[];
+    for (final r in g) {
+      for (final n in _serviceNames(r)) {
+        if (seen.add(n)) out.add(n);
+      }
+    }
+    return out;
+  }
+
+  String _mergedReason(_DayGroup g) {
+    final parts = <String>[];
+    for (final r in g) {
+      final t = ((r["reason"] ?? '').trim().isNotEmpty
+              ? r["reason"]!
+              : (r["complaint"] ?? ''))
+          .trim();
+      if (t.isNotEmpty && !parts.contains(t)) parts.add(t);
+    }
+    return parts.join(' / ');
+  }
+
+  String _sessionLabel(Map<String, String> r) =>
+      _timeKey(r["time"] ?? '') < 720 ? 'Morning (AM)' : 'Afternoon (PM)';
+
+  String _sessionTimes(Map<String, String> r) {
+    final out = (r["timeOut"] ?? '').trim();
+    final tin = r["time"] ?? '';
+    return out.isEmpty || out == '-' ? tin : '$tin – $out';
+  }
+
+  _VisitState _groupState(_DayGroup g) {
+    if (g.length == 1) return _stateFor(g.first);
+    final s = g.map(_stateFor).toList();
+    if (s.every((x) => x.label == 'Completed')) return s.first;
+    if (s.any((x) => x.label != 'Not Recorded' && x.label != 'Not Started')) {
+      return const _VisitState('Partly Complete', kWarning);
+    }
+    return s.first;
   }
 
   Future<DateTime?> _chooseDate() async {
@@ -495,6 +574,17 @@ class RecordsBookletState extends State<RecordsBooklet> {
       });
       return;
     }
+    if (mode == 'School Year') {
+      final cur = ReferenceCatalog.currentPeriod;
+      setState(() {
+        selectedFilter = 'School Year';
+        if (selectedAcadYear.isEmpty) {
+          selectedAcadYear = cur?.acadYear ?? '';
+          selectedSemester = cur?.semester ?? '';
+        }
+      });
+      return;
+    }
     if (mode == 'Date Range') {
       final DateTimeRange? range = await _chooseRange();
       if (!mounted || range == null) return;
@@ -534,16 +624,45 @@ class RecordsBookletState extends State<RecordsBooklet> {
     return null;
   }
 
-  List<String> _serviceNames(Map<String, String> record) {
+    List<String> _serviceNames(Map<String, String> record) {
     final visit = _visitFor(record);
     if (visit != null && visit.drafts.isNotEmpty) {
-      return [for (final d in visit.drafts) d.label];
+      return [for (final d in visit.drafts) _draftLabel(d, visit.vitals)];
     }
     return (record["complaint"] ?? "")
         .split(',')
         .map((s) => s.trim())
         .where((s) => s.isNotEmpty)
         .toList();
+  }
+
+  String _draftLabel(ServiceDraft d, VisitVitals v) {
+    if (d.serviceId != 'vital_signs') return d.label;
+    final picked = d
+        .chosen(kVitalsSelectedKey)
+        .where((e) => e != kSelectAllLabel)
+        .toList();
+    String? only;
+    if (picked.length == 1) {
+      only = picked.first;
+    } else if (picked.isEmpty) {
+      final present = <String>[
+        if (v.systolic != null && v.diastolic != null) 'Blood Pressure',
+        if (v.tempC != null) 'Temperature',
+        if (v.heartRate != null) 'Pulse',
+        if (v.respRate != null) 'Respiratory Rate',
+        if (v.o2Sat != null) 'O₂ Saturation',
+      ];
+      if (present.length == 1) only = present.first;
+    }
+    return switch (only) {
+      'Blood Pressure' => 'BP Taking',
+      'Temperature' => 'Temperature Taking',
+      'Pulse' => 'Pulse Taking',
+      'Respiratory Rate' => 'Respiratory Rate',
+      'O₂ Saturation' => 'SpO₂ Taking',
+      _ => d.label,
+    };
   }
 
   _VisitState _stateFor(Map<String, String> record) {
@@ -573,11 +692,9 @@ class RecordsBookletState extends State<RecordsBooklet> {
 
   String _fmtShort(DateTime d) => DateFormat("MMM d, yyyy").format(d);
 
-  void _showDetailDialog(Map<String, String> record) {
-    final visit = _visitFor(record);
-    final services = _serviceNames(record);
-    final state = _stateFor(record);
-    final procedures = _linkedProcedures(record["visitId"] ?? "");
+    void _showDetailDialog(_DayGroup group) {
+    final record = group.first;
+    final state = _groupState(group);
     final person =
         _rosterById[(record["personId"] ?? record["id"] ?? '').trim()];
     final category = (person?.category ?? record["type"] ?? '').trim();
@@ -602,19 +719,13 @@ class RecordsBookletState extends State<RecordsBooklet> {
                   child: SingleChildScrollView(
                     padding: const EdgeInsets.only(bottom: 4),
                     child: _detailBody(
-                      record: record,
-                      person: person,
-                      category: category,
-                      visit: visit,
-                      services: services,
-                      procedures: procedures,
-                    ),
+                        group: group, person: person, category: category),
                   ),
                 ),
                 const SizedBox(height: 8),
                 const Divider(color: kBorder, height: 1),
                 const SizedBox(height: 14),
-                _detailFooter(record),
+                _detailFooter(group),
               ],
             ),
           ),
@@ -623,35 +734,99 @@ class RecordsBookletState extends State<RecordsBooklet> {
     );
   }
 
-  Widget _detailFooter(Map<String, String> record) {
+  Widget _detailFooter(_DayGroup group) {
     return Row(children: [
-      Expanded(
-        child: OutlinedButton.icon(
-          onPressed: () {
-            Navigator.pop(context);
-            _openVisitEditor(record);
-          },
-          icon: const Icon(Icons.edit_outlined, size: 16, color: kPrimary),
-          label: const Text("Edit Record", style: TextStyle(color: kPrimary)),
-          style: OutlinedButton.styleFrom(
-            side: const BorderSide(color: kBorder),
-            shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-            padding: const EdgeInsets.symmetric(vertical: 13),
+      for (var i = 0; i < group.length; i++) ...[
+        if (i > 0) const SizedBox(width: 10),
+        Expanded(
+          child: OutlinedButton.icon(
+            onPressed: () {
+              Navigator.pop(context);
+              _openVisitEditor(group[i]);
+            },
+            icon: const Icon(Icons.edit_outlined, size: 16, color: kPrimary),
+            label: Text(
+                group.length == 1
+                    ? 'Edit Record'
+                    : 'Edit ${_sessionLabel(group[i])}',
+                style: const TextStyle(color: kPrimary)),
+            style: OutlinedButton.styleFrom(
+              side: const BorderSide(color: kBorder),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10)),
+              padding: const EdgeInsets.symmetric(vertical: 13),
+            ),
           ),
         ),
-      ),
+      ],
     ]);
   }
 
+  Widget _sessionBanner(Map<String, String> s) {
+    final am = _timeKey(s["time"] ?? '') < 720;
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(top: 20),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      decoration: BoxDecoration(
+        color: kPrimary.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: kPrimary.withValues(alpha: 0.35)),
+      ),
+      child: Row(children: [
+        Icon(am ? Icons.wb_sunny_outlined : Icons.nights_stay_outlined,
+            size: 17, color: kPrimary),
+        const SizedBox(width: 8),
+        Text('${_sessionLabel(s)} visit  ·  ${_sessionTimes(s)}',
+            style: const TextStyle(
+                fontSize: 13, fontWeight: FontWeight.w800, color: kPrimaryDk)),
+      ]),
+    );
+  }
+
+  List<Widget> _sessionBlock(Map<String, String> s, {required bool multi}) {
+    final visit = _visitFor(s);
+    final services = _serviceNames(s);
+    final procedures = _linkedProcedures(s["visitId"] ?? "");
+    return [
+      if (multi) _sessionBanner(s),
+      _sectionHeader('Services & Records', Icons.fact_check_outlined),
+      const SizedBox(height: 4),
+      if (visit == null)
+        _emptyServicesNote(services)
+      else
+        for (final draft in visit.drafts) ...[
+          VisitReviewCard(
+            title: _draftLabel(draft, visit.vitals),
+            lines: visitReviewAnswerLines(draft, visit.vitals,
+                canSeeRestricted: AccountService.canSeeRestrictedCounselling),
+            trailing: _draftStatePill(draft),
+          ),
+          const SizedBox(height: 10),
+        ],
+      if (procedures.isNotEmpty) ...[
+        _sectionHeader('Linked Procedures', Icons.link_rounded),
+        const SizedBox(height: 10),
+        ...procedures.map(_procedureTile),
+      ],
+      _infoSection('Record Information', Icons.history_rounded, [
+        _infoRow('Date', _fmtDisplayDate(s["date"] ?? '')),
+        _infoRow('Time in', s["time"] ?? ''),
+        _infoRow('Time out',
+            (s["timeOut"] ?? '').trim().isEmpty ? '-' : s["timeOut"]!),
+        _infoRow('Recorded by', s["createdBy"] ?? '-'),
+        if ((s["complaint"] ?? '').trim().isNotEmpty)
+          _infoRow('Complaint', s["complaint"]!),
+      ]),
+    ];
+  }
+
   Widget _detailBody({
-    required Map<String, String> record,
+    required _DayGroup group,
     required IndividualRecord? person,
     required String category,
-    required VisitDetailsController? visit,
-    required List<String> services,
-    required List<ProcedureRecord> procedures,
   }) {
+    final record = group.first;
     final isStudent = category == 'Student';
     final isFaculty = category == 'Faculty';
 
@@ -675,27 +850,23 @@ class RecordsBookletState extends State<RecordsBooklet> {
             _infoRow('Name', record["name"] ?? ''),
             _infoRow('Record No', record["id"] ?? ''),
             _infoRow('Role', category),
-            if ((record["contact"] ?? '').trim().isNotEmpty)
-              _infoRow('Contact', record["contact"]!),
           ];
 
     final academicRows = <Widget>[
-      _infoRow(
-          'School Year', person?.academicYear ?? record["academicYear"] ?? ''),
-      _infoRow('Semester', person?.semester ?? record["semester"] ?? ''),
+      _infoRow('School Year',
+          record["academicYear"] ?? person?.academicYear ?? ''),
+      _infoRow('Semester', record["semester"] ?? person?.semester ?? ''),
       if (isStudent) ...[
         _infoRow('Institute', person?.institute ?? record["institute"] ?? ''),
         _infoRow('Program', person?.program ?? record["program"] ?? ''),
         _infoRow('Year Level', person?.yearLevel ?? record["year"] ?? ''),
       ] else if (isFaculty) ...[
         _infoRow('Institute', person?.institute ?? record["institute"] ?? ''),
-        _infoRow('Position',
-            person?.position ?? record["position"] ?? record["year"] ?? ''),
+        _infoRow('Position', person?.position ?? record["position"] ?? ''),
       ] else ...[
         _infoRow('Department / Office',
-            person?.department ?? record["department"] ?? record["dept"] ?? ''),
-        _infoRow('Position',
-            person?.position ?? record["position"] ?? record["year"] ?? ''),
+            person?.department ?? record["department"] ?? ''),
+        _infoRow('Position', person?.position ?? record["position"] ?? ''),
       ],
     ];
 
@@ -711,39 +882,10 @@ class RecordsBookletState extends State<RecordsBooklet> {
           isStudent ? Icons.school_outlined : Icons.work_outline,
           academicRows,
         ),
-        _sectionHeader('Services & Records', Icons.fact_check_outlined),
-        const SizedBox(height: 4),
-        if (visit == null)
-          _emptyServicesNote(services)
-        else
-          for (final draft in visit.drafts) ...[
-            VisitReviewCard(
-              title: draft.label,
-              lines: visitReviewAnswerLines(draft, visit.vitals,
-                  canSeeRestricted: AccountService.canSeeRestrictedCounselling),
-              trailing: _draftStatePill(draft),
-            ),
-            const SizedBox(height: 10),
-          ],
-        if (procedures.isNotEmpty) ...[
-          _sectionHeader('Linked Procedures', Icons.link_rounded),
-          const SizedBox(height: 10),
-          ...procedures.map(_procedureTile),
-        ],
-        _infoSection('Record Information', Icons.history_rounded, [
-          _infoRow('Date', _fmtDisplayDate(record["date"] ?? '')),
-          _infoRow('Time in', record["time"] ?? ''),
-          _infoRow(
-              'Time out',
-              (record["timeOut"] ?? '').trim().isEmpty
-                  ? '-'
-                  : record["timeOut"]!),
-          _infoRow('Recorded by', record["createdBy"] ?? '-'),
-          if ((record["complaint"] ?? '').trim().isNotEmpty)
-            _infoRow('Complaint', record["complaint"]!),
-        ]),
+        for (final s in group) ..._sessionBlock(s, multi: group.length > 1),
       ],
     );
+  
   }
 
   Widget _detailHeader(
@@ -754,8 +896,8 @@ class RecordsBookletState extends State<RecordsBooklet> {
   ) {
     final color = _categoryColor(category);
     final isStudent = category == 'Student';
-    final ay = (person?.academicYear ?? record["academicYear"] ?? '').trim();
-    final sem = (person?.semester ?? record["semester"] ?? '').trim();
+    final ay = (record["academicYear"] ?? person?.academicYear ?? '').trim();
+    final sem = (record["semester"] ?? person?.semester ?? '').trim();
 
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -2177,31 +2319,30 @@ class RecordsBookletState extends State<RecordsBooklet> {
     });
   }
 
-  List<Widget> _filterControls() {
+   List<Widget> _filterControls() {
     final Widget? extra = _extraDateControl();
     return [
       _dateModeDropdown(),
       if (extra != null) extra,
       _instituteDropdown(),
-      _programDropdown(),
+      if (_activeInstitute.isNotEmpty) _programDropdown(),
       if (_hasActiveFilters)
-        SizedBox(
-          height: 40,
-          child: Center(child: _clearFiltersButton()),
-        ),
+        SizedBox(height: 40, child: Center(child: _clearFiltersButton())),
     ];
   }
 
   bool get _hasActiveFilters =>
-      selectedFilter != 'All' ||
+      selectedFilter != 'Today' ||
       _activeInstitute.isNotEmpty ||
       _activeProgram.isNotEmpty;
 
   void _clearFilters() {
     setState(() {
-      selectedFilter = 'All';
+      selectedFilter = 'Today';
       selectedYear = null;
       selectedRange = null;
+      selectedAcadYear = '';
+      selectedSemester = '';
       selectedInstitute = '';
       selectedProgram = '';
     });
@@ -2230,6 +2371,12 @@ class RecordsBookletState extends State<RecordsBooklet> {
 
   Widget? _extraDateControl() {
     switch (selectedFilter) {
+      case 'School Year':
+        return Row(mainAxisSize: MainAxisSize.min, children: [
+          _acadYearDropdown(),
+          const SizedBox(width: 8),
+          _semesterDropdown(),
+        ]);      
       case 'Year':
         return _yearDropdown();
       case 'Pick Date':
@@ -2294,7 +2441,7 @@ class RecordsBookletState extends State<RecordsBooklet> {
             for (final String mode in _dateFilterModes)
               DropdownMenuItem(
                 value: mode,
-                child: Text(mode == 'All' ? 'Date: All' : mode),
+                child: Text(mode == 'All' ? 'All' : mode),
               ),
           ],
           onChanged: _onDateModeChanged,
@@ -2302,7 +2449,68 @@ class RecordsBookletState extends State<RecordsBooklet> {
       ),
     );
   }
+  List<String> get _acadYears {
+    final out = <String>[];
+    for (final p in ReferenceCatalog.periodsNewestFirst) {
+      if (p.acadYear.isNotEmpty && !out.contains(p.acadYear)) {
+        out.add(p.acadYear);
+      }
+    }
+    return out;
+  }
 
+  List<String> get _semestersOfYear {
+    final out = <String>[];
+    for (final p in ReferenceCatalog.periodsNewestFirst) {
+      if (p.acadYear == selectedAcadYear &&
+          p.semester.isNotEmpty &&
+          !out.contains(p.semester)) {
+        out.add(p.semester);
+      }
+    }
+    return out;
+  }
+
+  Widget _acadYearDropdown() {
+    final years = _acadYears;
+    if (years.isEmpty) {
+      return _filterDropdown<String>(
+        value: '',
+        active: true,
+        items: const [DropdownMenuItem(value: '', child: Text('No school year'))],
+        onChanged: (_) {},
+      );
+    }
+    final safe = years.contains(selectedAcadYear) ? selectedAcadYear : years.first;
+    return _filterDropdown<String>(
+      value: safe,
+      active: true,
+      items: [
+        for (final y in years) DropdownMenuItem(value: y, child: Text('SY $y')),
+      ],
+      onChanged: (v) {
+        if (v == null) return;
+        setState(() {
+          selectedAcadYear = v;
+          selectedSemester = '';
+        });
+      },
+    );
+  }
+
+  Widget _semesterDropdown() {
+    final sems = _semestersOfYear;
+    final safe = sems.contains(selectedSemester) ? selectedSemester : '';
+    return _filterDropdown<String>(
+      value: safe,
+      active: true,
+      items: [
+        const DropdownMenuItem(value: '', child: Text('All Semesters')),
+        for (final s in sems) DropdownMenuItem(value: s, child: Text(s)),
+      ],
+      onChanged: (v) => setState(() => selectedSemester = v ?? ''),
+    );
+  }
   Widget _yearDropdown() {
     final List<int> years = _availableYears;
     final int safe = years.contains(selectedYear)
@@ -2348,10 +2556,7 @@ class RecordsBookletState extends State<RecordsBooklet> {
         if (v == null) return;
         setState(() {
           selectedInstitute = v;
-
-          if (!_programOptions.contains(selectedProgram)) {
-            selectedProgram = '';
-          }
+          selectedProgram = '';
         });
       },
     );
@@ -2704,87 +2909,42 @@ class RecordsBookletState extends State<RecordsBooklet> {
     );
   }
 
-  static const double _servicesColWidth = 170;
+  static const double _servicesColWidth = 230;
 
-  Widget _serviceCell(List<String> names, {required double maxWidth}) {
+    Widget _serviceCell(List<String> names, {required double maxWidth}) {
     if (names.isEmpty) {
       return const Text('-', style: TextStyle(color: kTextSub));
     }
-
-    const double gap = 4;
-    final scaler = MediaQuery.textScalerOf(context);
-
-    double textWidth(String s, FontWeight w) {
-      final tp = TextPainter(
-        text: TextSpan(text: s, style: TextStyle(fontSize: 12, fontWeight: w)),
-        textScaler: scaler,
-        textDirection: Directionality.of(context),
-      )..layout();
-      return tp.width;
-    }
-
-    double chipWidth(String name) => textWidth(name, FontWeight.w600) + 18 + 2;
-
-    double moreWidth(int hidden) => textWidth('+$hidden', FontWeight.w700) + 18;
-
-    final widths = [for (final n in names) chipWidth(n)];
-    final visible = <String>[];
-    var used = 0.0;
-    for (var i = 0; i < names.length; i++) {
-      final w = widths[i] + (visible.isEmpty ? 0 : gap);
-
-      final more =
-          names.length - i > 1 ? moreWidth(names.length - i - 1) + gap : 0.0;
-      if (used + w + more > maxWidth - 1) break;
-      visible.add(names[i]);
-      used += w;
-    }
-
-    final forced = visible.isEmpty;
-    if (forced) visible.add(names.first);
-
-    final hidden = names.length - visible.length;
-
-    if (!forced && hidden == 0 && visible.length == 1) {
-      return SizedBox(width: maxWidth, child: _serviceChip(visible.first));
-    }
-
-    final children = <Widget>[];
-    for (var i = 0; i < visible.length; i++) {
-      if (i > 0) children.add(const SizedBox(width: gap));
-      children.add(_serviceChip(visible[i]));
-    }
-    if (hidden > 0) {
-      children.add(const SizedBox(width: gap));
-      children.add(Tooltip(
-        message: names.skip(visible.length).join(', '),
-        triggerMode: TooltipTriggerMode.longPress,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
-          decoration: BoxDecoration(
-            color: const Color(0xFFEEF1F5),
-            borderRadius: BorderRadius.circular(6),
+    const maxShown = 3;
+    final shown = names.take(maxShown).toList();
+    final hidden = names.length - shown.length;
+    return Wrap(
+      spacing: 4,
+      runSpacing: 4,
+      children: [
+        for (final n in shown)
+          ConstrainedBox(
+            constraints: BoxConstraints(maxWidth: maxWidth),
+            child: _serviceChip(n),
           ),
-          child: Text(
-            '+$hidden',
-            style: const TextStyle(
-                fontSize: 12, fontWeight: FontWeight.w700, color: kTextSub),
+        if (hidden > 0)
+          Tooltip(
+            message: names.skip(maxShown).join(', '),
+            triggerMode: TooltipTriggerMode.longPress,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+              decoration: BoxDecoration(
+                color: const Color(0xFFEEF1F5),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text('+$hidden',
+                  style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: kTextSub)),
+            ),
           ),
-        ),
-      ));
-    }
-
-    if (forced) {
-      children[0] = Flexible(child: children[0]);
-    }
-    if (children.length > 1) {
-      children[children.length - 1] =
-          Flexible(child: children[children.length - 1]);
-    }
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: children,
+      ],
     );
   }
 
@@ -2821,7 +2981,7 @@ class RecordsBookletState extends State<RecordsBooklet> {
   }
 
   Widget _buildTable(String? type) {
-    final filtered = _getFilteredRecords(typeFilter: type);
+    final filtered = _groupByDay(_getFilteredRecords(typeFilter: type));
     final isAll = type == null;
     final isStudent = type == 'Student';
     final isFaculty = type == 'Faculty';
@@ -2917,7 +3077,7 @@ class RecordsBookletState extends State<RecordsBooklet> {
                   const programWidth = 158.0;
                   const reasonWidth = 190.0;
                   const servicesWidth = _servicesColWidth;
-                  const dateWidth = 140.0;
+                  const dateWidth = 200.0;
 
                   return SingleChildScrollView(
                     child: SingleChildScrollView(
@@ -2928,7 +3088,7 @@ class RecordsBookletState extends State<RecordsBooklet> {
                         child: DataTable(
                           headingRowHeight: 52,
                           dataRowMinHeight: 64,
-                          dataRowMaxHeight: 76,
+                          dataRowMaxHeight: 100,
                           showCheckboxColumn: false,
                           headingRowColor:
                               WidgetStateProperty.all(const Color(0xFFF8FAFC)),
@@ -2951,7 +3111,8 @@ class RecordsBookletState extends State<RecordsBooklet> {
                               DataColumn(label: Center(child: Text(h))),
                           ],
                           rows: filtered.asMap().entries.map((entry) {
-                            final e = entry.value;
+                            final group = entry.value;
+                            final e = group.first;
                             final even = entry.key % 2 == 0;
                             final rowType = ((e["type"] ?? '').trim());
                             final isStudentRow = rowType == 'Student';
@@ -3025,9 +3186,11 @@ class RecordsBookletState extends State<RecordsBooklet> {
                             }
 
                             final reasonText =
-                                (e["reason"] ?? "").trim().isNotEmpty
+                             _mergedReason(group);
+                              /*  (e["reason"] ?? "").trim().isNotEmpty
                                     ? (e["reason"] ?? "").trim()
-                                    : (e["complaint"] ?? "").trim();
+                                    : (e["complaint"] ?? "").trim();*/
+
                             cells.add(DataCell(SizedBox(
                               width: reasonWidth - 8,
                               child: Align(
@@ -3051,7 +3214,7 @@ class RecordsBookletState extends State<RecordsBooklet> {
                               width: servicesWidth - 8,
                               child: Align(
                                 alignment: Alignment.centerLeft,
-                                child: _serviceCell(_serviceNames(e),
+                                child: _serviceCell(_mergedServiceNames(group),
                                     maxWidth: servicesWidth - 8),
                               ),
                             )));
@@ -3061,7 +3224,7 @@ class RecordsBookletState extends State<RecordsBooklet> {
                                 mainAxisAlignment: MainAxisAlignment.center,
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Text(_fmtDisplayDate(e["date"] ?? ''),
+                                    Text(_fmtDisplayDate(e["date"] ?? ''),
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
                                       style: const TextStyle(
@@ -3069,11 +3232,12 @@ class RecordsBookletState extends State<RecordsBooklet> {
                                           fontWeight: FontWeight.w600,
                                           color: kTextMain)),
                                   const SizedBox(height: 2),
-                                  Text(e["time"] ?? '',
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
-                                          fontSize: 11.5, color: kTextSub)),
+                                  for (final r in group)
+                                    Text(_sessionTimes(r),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(
+                                            fontSize: 11.5, color: kTextSub)),
                                 ],
                               ),
                             )));
@@ -3086,7 +3250,7 @@ class RecordsBookletState extends State<RecordsBooklet> {
                                     ? Colors.white
                                     : const Color(0xFFFAFCFD);
                               }),
-                              onSelectChanged: (_) => _showDetailDialog(e),
+                              onSelectChanged: (_) => _showDetailDialog(group),
                               cells: cells,
                             );
                           }).toList(),

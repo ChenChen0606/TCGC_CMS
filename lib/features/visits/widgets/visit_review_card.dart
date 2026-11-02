@@ -26,47 +26,44 @@ class VisitReviewRow extends StatelessWidget {
   final String label;
   final String value;
 
-  static const int _stackThreshold = 24;
-
   @override
   Widget build(BuildContext context) {
     final shown = value.isEmpty ? '—' : value;
-    final labelStyle =
-        const TextStyle(fontSize: 12.5, color: AppColors.textSub);
-    final valueStyle = const TextStyle(
-        fontSize: 12.5, fontWeight: FontWeight.w600, color: AppColors.textMain);
-
-    if (label.length > _stackThreshold) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 4),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('$label:', style: labelStyle),
-            const SizedBox(height: 2),
-            Text(shown, style: valueStyle),
-          ],
-        ),
-      );
-    }
+    const labelStyle = TextStyle(fontSize: 12.5, color: AppColors.textSub);
+    const valueStyle = TextStyle(
+        fontSize: 12.5,
+        fontWeight: FontWeight.w600,
+        color: AppColors.textMain,
+        height: 1.3);
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            width: 120,
-            child: Text('$label:', style: labelStyle),
-          ),
-          Expanded(
-            child: Text(
-              shown,
-              style: valueStyle,
+      child: LayoutBuilder(builder: (context, c) {
+        if (c.maxWidth < 300) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('$label:', style: labelStyle),
+              const SizedBox(height: 2),
+              Text(shown, style: valueStyle),
+            ],
+          );
+        }
+        final labelWidth = (c.maxWidth * 0.34).clamp(120.0, 230.0).toDouble();
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(
+              width: labelWidth,
+              child: Text('$label:', style: labelStyle),
             ),
-          ),
-        ],
-      ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(shown, style: valueStyle, softWrap: true),
+            ),
+          ],
+        );
+      }),
     );
   }
 }
