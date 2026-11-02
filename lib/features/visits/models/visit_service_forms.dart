@@ -1183,7 +1183,7 @@ const String kVitalsSelectedKey = 'vitals_selected';
 const String kSelectAllLabel = 'Select All';
 
 const List<String> kVitalChoices = [
-  'Blood Pressure',
+  'Blood Pressure',  
   'Temperature',
   'Pulse',
   'Respiratory Rate',

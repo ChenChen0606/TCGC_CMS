@@ -434,22 +434,18 @@ Map<String, dynamic>? buildServiceRecord({
       final vsPulse = vsOn('Pulse') ? vitals.heartRate : null;
       final vsResp = vsOn('Respiratory Rate') ? vitals.respRate : null;
       final vsSpo2 = vsOn('O₂ Saturation') ? vitals.o2Sat : null;
-      final vsHeight = vsOn('Weight / Height') ? vitals.heightCm : null;
-      final vsWeight = vsOn('Weight / Height') ? vitals.weightKg : null;
 
       final vsBp = VitalClassifier.classifyBp(vsSys, vsDia);
       final vsTempClass = VitalClassifier.classifyTemp(vsTemp);
       final vsPulseClass = VitalClassifier.classifyPulse(vsPulse);
       final vsRespClass = VitalClassifier.classifyResp(vsResp);
       final vsSpo2Class = VitalClassifier.classifySpo2(vsSpo2);
-      final vsAnyVital = vsSys != null ||
+       final vsAnyVital = vsSys != null ||
           vsDia != null ||
           vsTemp != null ||
           vsPulse != null ||
           vsResp != null ||
-          vsSpo2 != null ||
-          vsHeight != null ||
-          vsWeight != null;
+          vsSpo2 != null;
       return {
         'systolic': _vitalNum(vsSys),
         'diastolic': _vitalNum(vsDia),
@@ -459,8 +455,6 @@ Map<String, dynamic>? buildServiceRecord({
             vsOn('Temperature') ? _textOrNull(d, 'method') : null,
         'respiratory_rate': _vitalNum(vsResp),
         'spo2': _vitalNum(vsSpo2),
-        'height_cm': _vitalNum(vsHeight),
-        'weight_kg': _vitalNum(vsWeight),
         'arm': vsOn('Blood Pressure') ? _listOrNull(d, 'arm_used') : null,
         'position': vsOn('Blood Pressure') ? _listOrNull(d, 'position') : null,
         'bp_classification': vsBp?.label,
@@ -478,11 +472,9 @@ Map<String, dynamic>? buildServiceRecord({
         if (recordedBy != null && recordedBy.isNotEmpty)
           'recorded_by': recordedBy,
         'action_taken': _vitalActionsOrNull(d),
-        'referral_reason': _textOrNull(d, 'referral_reason'),
-        'symptoms': _textOrNull(d, 'symptoms'),
+       'referral_reason': _textOrNull(d, 'referral_reason'),
+        'referred_to': _textOrNull(d, 'referred_to'),
         'assessment': _textOrNull(d, 'assessment'),
-        'follow_up': _textOrNull(d, 'follow_up'),
-        'notes': _textOrNull(d, 'notes'),
       };
     default:
       return null;
@@ -560,8 +552,6 @@ void applyServiceRecordTo({
 }) {
   switch (dartServiceId) {
     case 'bpi':
-      _setNum(data, 'height_cm', row['height_cm']);
-      _setNum(data, 'weight_kg', row['weight_kg']);
 
       _setStr(data, 'bmi', row['bmi']);
       _setStr(data, 'bmi_class', row['classification']);
@@ -820,8 +810,7 @@ void applyServiceRecordTo({
         if (row['temperature'] != null) 'Temperature',
         if (row['pulse_rate'] != null) 'Pulse',
         if (row['respiratory_rate'] != null) 'Respiratory Rate',
-        if (row['height_cm'] != null || row['weight_kg'] != null)
-          'Weight / Height',
+        
         if (row['spo2'] != null) 'O₂ Saturation',
       ];
       if (vsTicked.isNotEmpty) {
@@ -834,10 +823,9 @@ void applyServiceRecordTo({
       _readList(data, 'arm_used', row['arm']);
       _applyVitalActions(data, row['action_taken']);
       _setStr(data, 'referral_reason', row['referral_reason']);
-      _setStr(data, 'symptoms', row['symptoms']);
       _setStr(data, 'assessment', row['assessment']);
-      _setStr(data, 'follow_up', row['follow_up']);
-      _setStr(data, 'notes', row['notes']);
+        _setStr(data, 'referred_to', row['referred_to']);
+      
   }
 }
 

@@ -636,33 +636,40 @@ class RecordsBookletState extends State<RecordsBooklet> {
         .toList();
   }
 
-  String _draftLabel(ServiceDraft d, VisitVitals v) {
-    if (d.serviceId != 'vital_signs') return d.label;
+    Set<String> _vitalsTaken(ServiceDraft d, VisitVitals v) {
     final picked = d
         .chosen(kVitalsSelectedKey)
         .where((e) => e != kSelectAllLabel)
-        .toList();
-    String? only;
-    if (picked.length == 1) {
-      only = picked.first;
-    } else if (picked.isEmpty) {
-      final present = <String>[
-        if (v.systolic != null && v.diastolic != null) 'Blood Pressure',
-        if (v.tempC != null) 'Temperature',
-        if (v.heartRate != null) 'Pulse',
-        if (v.respRate != null) 'Respiratory Rate',
-        if (v.o2Sat != null) 'O₂ Saturation',
-      ];
-      if (present.length == 1) only = present.first;
-    }
-    return switch (only) {
-      'Blood Pressure' => 'BP Taking',
-      'Temperature' => 'Temperature Taking',
-      'Pulse' => 'Pulse Taking',
-      'Respiratory Rate' => 'Respiratory Rate',
-      'O₂ Saturation' => 'SpO₂ Taking',
-      _ => d.label,
+        .toSet();
+    if (picked.isNotEmpty) return picked;
+    return {
+      if (v.systolic != null && v.diastolic != null) 'Blood Pressure',
+      if (v.tempC != null) 'Temperature',
+      if (v.heartRate != null) 'Pulse',
+      if (v.respRate != null) 'Respiratory Rate',
+      if (v.o2Sat != null) 'O₂ Saturation',
     };
+  }
+
+  String _draftLabel(ServiceDraft d, VisitVitals v) {
+    if (d.serviceId != 'vital_signs') return d.label;
+    final taken = _vitalsTaken(d, v);
+
+    // BP alone, or BP + Pulse together, is one "BP Taking" service.
+    if (taken.contains('Blood Pressure') &&
+        taken.difference({'Blood Pressure', 'Pulse'}).isEmpty) {
+      return 'BP Taking';
+    }
+    if (taken.length == 1) {
+      return switch (taken.first) {
+        'Pulse' => 'Pulse Taking',
+        'Temperature' => 'Temperature Checking',
+        'Respiratory Rate' => 'Respiratory Rate',
+        'O₂ Saturation' => 'SpO₂ Taking',
+        _ => d.label,
+      };
+    }
+    return d.label; // several different vitals → "Vital signs"
   }
 
   _VisitState _stateFor(Map<String, String> record) {
