@@ -1,5 +1,6 @@
 import 'package:intl/intl.dart';
 import 'package:clinicmanagementsystem/core/services/data_tracker.dart';
+import 'package:clinicmanagementsystem/core/services/time_service.dart';
 import 'package:clinicmanagementsystem/features/patients/services/patient_service.dart';
 import 'package:clinicmanagementsystem/core/config/supabase_config.dart';
 
@@ -64,6 +65,7 @@ class Visit {
       createdAt: _parseTs(row['created_at']),
       updatedAt: _parseTs(row['updated_at']),
       recordedBy: row['recorded_by'] as String? ?? row['created_by'] as String?,
+      outTime: _parseTs(row['time_out']),
     );
   }
 
@@ -114,8 +116,9 @@ class Visit {
       "personId": patientId,
       "date":
           visitDate == null ? '' : DateFormat("yyyy-MM-dd").format(visitDate!),
-      "time": visitTime.trim().isEmpty ? '-' : visitTime.trim(),
+      "time": visitTime.trim().isEmpty ? '-' : _to12(visitTime),
       "timeOut": clock(out),
+      "timeOutDate": out == null ? '' : DateFormat("yyyy-MM-dd").format(out),
       "name": visitorLabel,
       "id": visitorRef,
       "type": categoryLabel,
@@ -135,6 +138,17 @@ class Visit {
     if (v is DateTime) return v;
     if (v is String) return DateTime.tryParse(v);
     return null;
+  }
+
+  /// "22:49:00" -> "10:49 PM". Anything it can't parse is returned as is.
+  static String _to12(String raw) {
+    final t = raw.trim();
+    for (final pattern in const ['HH:mm:ss', 'HH:mm']) {
+      try {
+        return DateFormat('hh:mm a').format(DateFormat(pattern).parseStrict(t));
+      } catch (_) {}
+    }
+    return t;
   }
 }
 
@@ -186,7 +200,9 @@ class VisitService {
       final map = Map<String, dynamic>.from(r);
       final visitId = '${map['visit_id'] ?? map['id'] ?? ''}';
       final visit = Visit.fromSupabase(map);
-      final out = outByVisit[visitId];
+      // The saved Time Out wins; old rows without one fall back to the
+      // latest completed service.
+      final out = visit.outTime ?? outByVisit[visitId];
       return Visit(
         id: visit.id,
         patientId: visit.patientId,
@@ -241,15 +257,24 @@ class VisitService {
     required String complaint,
     DateTime? visitDate,
     String visitTime = '',
-    String? timeOut,
+    DateTime? timeOut,
     String? reasonForVisit,
     String? recordedBy,
   }) async {
-    final now = DateTime.now();
+    // Defaults come from the Supabase server clock, not the desktop clock.
+    final now = await TimeService.serverNow();
     final visitNum = 'V${now.millisecondsSinceEpoch}';
     final time24 = visitTime.isEmpty
         ? DateFormat('HH:mm:ss').format(now)
         : VisitService._toTime24(visitTime);
+    final day = visitDate ?? now;
+
+    if (timeOut != null) {
+      final start = _startOf(day, time24);
+      if (_minute(timeOut.toLocal()).isBefore(_minute(start))) {
+        throw ArgumentError('Time Out cannot be earlier than Time In.');
+      }
+    }
 
     final createdBy = supabaseClient.auth.currentUser?.id ?? '';
     if (createdBy.isEmpty) {
@@ -263,8 +288,10 @@ class VisitService {
         .insert({
           'visit_number': visitNum,
           'person_id': patientId,
-          'visit_date': DateFormat("yyyy-MM-dd").format(visitDate ?? now),
+          'visit_date': DateFormat("yyyy-MM-dd").format(day),
           'visit_time': time24,
+          if (timeOut != null)
+            'time_out': timeOut.toUtc().toIso8601String(),
           'reason_for_visit': reason.isNotEmpty ? reason : complaint,
           'status': 'Completed',
           'created_by': createdBy,
@@ -302,6 +329,16 @@ class VisitService {
       return t;
     }
   }
+
+  static DateTime _startOf(DateTime day, String time24) {
+    final p = time24.split(':');
+    final h = int.tryParse(p.isNotEmpty ? p[0] : '') ?? 0;
+    final m = int.tryParse(p.length > 1 ? p[1] : '') ?? 0;
+    return DateTime(day.year, day.month, day.day, h, m);
+  }
+
+  static DateTime _minute(DateTime t) =>
+      DateTime(t.year, t.month, t.day, t.hour, t.minute);
 
   static Future<List<DashboardVisit>> fetchDashboardVisits() async {
     final rows = await supabaseClient.from('clinic_visits').select('''

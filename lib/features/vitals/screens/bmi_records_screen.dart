@@ -13,6 +13,12 @@ import 'package:clinicmanagementsystem/core/config/supabase_config.dart';
 import 'package:clinicmanagementsystem/core/theme/app_colors.dart';
 import 'package:clinicmanagementsystem/shared/printing/document_template.dart';
 
+class AcadPeriod {
+  final String acadYear;
+  final String semester;
+  const AcadPeriod(this.acadYear, this.semester);
+}
+
 class BmiRecord {
   final String bmiRecordId;
   final String visitServiceId;
@@ -37,6 +43,8 @@ class BmiRecord {
   final String yearLevel;
   final String departmentOffice;
   final String position;
+  final String acadYear;
+  final String semester;
   final int? age;
 
   const BmiRecord({
@@ -63,12 +71,16 @@ class BmiRecord {
     this.yearLevel = '',
     this.departmentOffice = '',
     this.position = '',
+    this.acadYear = '',
+    this.semester = '',
     this.age,
   });
 
   factory BmiRecord.fromSupabase(Map<String, dynamic> row) {
     final dob = _parseTs(row['date_of_birth'] as String?);
+
     int? age;
+
     if (dob != null) {
       final now = DateTime.now();
       age = now.year - dob.year;
@@ -77,6 +89,7 @@ class BmiRecord {
         age--;
       }
     }
+
     return BmiRecord(
       bmiRecordId: row['bmi_record_id'] as String? ?? '',
       visitServiceId: row['visit_service_id'] as String? ?? '',
@@ -107,6 +120,8 @@ class BmiRecord {
           (row['department_office'] as String?)?.trim() ??
           '',
       position: (row['position'] as String?)?.trim() ?? '',
+      acadYear: (row['acad_year'] as String?)?.trim() ?? '',
+      semester: (row['semester'] as String?)?.trim() ?? '',
       age: age,
     );
   }
@@ -200,27 +215,45 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
 
   static const PdfColor _sheetGreen = PdfColor.fromInt(0xFF0E6B47);
 
+  static const List<String> _indicatorOptions = [
+    'Underweight',
+    'Normal',
+    'Overweight',
+    'Obese',
+  ];
+
   bool _isLoading = true;
   List<BmiRecord> _allRecords = [];
+
+  /// Records after every filter EXCEPT the BMI indicator filter.
+  /// Used for the stat strip so the counts above never change when an
+  /// indicator is selected.
+  List<BmiRecord> _scopeRecords = [];
+
+  /// Records after ALL filters (including the BMI indicator filter).
+  /// Used for the summary tables, the details table and the printout.
   List<BmiRecord> _filteredRecords = [];
   List<BmiSummaryByInstitute> _instituteSummaries = [];
   List<BmiSummaryByProgram> _programSummaries = [];
   List<String> _institutes = [];
+  List<AcadPeriod> _periods = [];
 
   String _selectedInstitute = 'All';
   String _selectedClassification = 'All';
 
+  /// "Today" is first so the page opens on today's records.
   static const List<String> _dateFilterModes = [
-    'All',
     'Today',
     'This Week',
     'This Month',
-    'Year',
+    'Academic Year',
     'Date Range',
     'Pick Date',
+    'All',
   ];
-  String _selectedDateFilter = 'All';
-  int? _selectedYear;
+  String _selectedDateFilter = 'Today';
+  String _selectedAcadYear = 'All';
+  String _selectedSemester = 'All';
   DateTimeRange? _pickedRange;
   DateTime? _pickedDate;
 
@@ -229,6 +262,8 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
   late AnimationController _fadeCtrl;
   late Animation<double> _fadeAnim;
   VoidCallback? _dataListener;
+
+  bool get _singleIndicator => _selectedClassification != 'All';
 
   @override
   void initState() {
@@ -254,6 +289,20 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
     if (mounted) setState(() => _isLoading = true);
 
     await ReferenceCatalog.loadQuietly();
+
+    // Academic periods (for the Academic Year / Semester filter).
+    final periods = <AcadPeriod>[];
+    try {
+      final rows =
+          await supabaseClient.from('academic_periods').select('acad_year, semester');
+      for (final row in (rows as List)) {
+        final m = Map<String, dynamic>.from(row as Map);
+        final y = (m['acad_year'] as String?)?.trim() ?? '';
+        final s = (m['semester'] as String?)?.trim() ?? '';
+        if (y.isNotEmpty) periods.add(AcadPeriod(y, s));
+      }
+    } catch (_) {}
+
     try {
       final response = await supabaseClient.from('bmi_records').select('''
         bmi_record_id, visit_service_id, height_cm, weight_kg, bmi, classification, notes,
@@ -288,6 +337,7 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
           final prg = _firstMap(iar['program']);
           final dpt = _firstMap(iar['departments_offices']);
           final pos = _firstMap(iar['positions']);
+          final per = _firstMap(iar['academic_periods']);
 
           flat['visit_date'] = cv['visit_date'];
           flat['visit_time'] = cv['visit_time'];
@@ -305,6 +355,8 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
           flat['year_level'] = iar['year_level'];
           flat['dept_office'] = dpt['name'];
           flat['position'] = pos['name'];
+          flat['acad_year'] = per['acad_year'];
+          flat['semester'] = per['semester'];
           records.add(BmiRecord.fromSupabase(flat));
         } catch (_) {}
       }
@@ -313,6 +365,7 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
 
       records.removeWhere((r) => r.personType != 'Student');
       setState(() {
+        _periods = periods;
         _allRecords = records;
         _buildFilterOptions();
         _applyFilters();
@@ -321,6 +374,7 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
     } catch (e) {
       if (!mounted) return;
       setState(() {
+        _periods = periods;
         _buildFilterOptions();
         _applyFilters();
         _isLoading = false;
@@ -370,17 +424,15 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
 
   void _applyFilters() {
     final q = _searchQuery.trim().toLowerCase();
-    final filtered = _allRecords.where((r) {
+
+    // Everything except the BMI indicator filter.
+    final scope = _allRecords.where((r) {
       if (r.personType != 'Student') return false;
       if (_selectedInstitute != 'All' &&
           r.instituteName != _selectedInstitute) {
         return false;
       }
-      if (_selectedClassification != 'All' &&
-          r.indicator != _selectedClassification) {
-        return false;
-      }
-      if (!_matchesDateFilter(r.visitDate)) return false;
+      if (!_matchesDateFilter(r)) return false;
       if (q.isNotEmpty) {
         final hay = [
           r.personId,
@@ -395,12 +447,19 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
       return true;
     }).toList();
 
+    // Tables + print only show the selected BMI indicator.
+    final filtered = _selectedClassification == 'All'
+        ? scope
+        : scope.where((r) => r.indicator == _selectedClassification).toList();
+
+    _scopeRecords = scope;
     _filteredRecords = filtered;
     _instituteSummaries = _summarizeByInstitute(filtered);
     _programSummaries = _summarizeByProgram(filtered);
   }
 
-  bool _matchesDateFilter(DateTime? date) {
+  bool _matchesDateFilter(BmiRecord r) {
+    final date = r.visitDate;
     switch (_selectedDateFilter) {
       case 'Today':
         if (date == null) return false;
@@ -420,9 +479,18 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
         if (date == null) return false;
         final now = DateTime.now();
         return date.year == now.year && date.month == now.month;
-      case 'Year':
-        if (date == null) return false;
-        return date.year == (_selectedYear ?? DateTime.now().year);
+      case 'Academic Year':
+        // 'All' year => every year; otherwise match the picked A.Y. and
+        // (optionally) the picked semester.
+        if (_selectedAcadYear != 'All' && r.acadYear != _selectedAcadYear) {
+          return false;
+        }
+        if (_selectedAcadYear != 'All' &&
+            _selectedSemester != 'All' &&
+            r.semester != _selectedSemester) {
+          return false;
+        }
+        return true;
       case 'Date Range':
         final range = _pickedRange;
         if (range == null || date == null) return false;
@@ -492,6 +560,91 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
     }
     final list = groups.values.toList();
     list.sort((a, b) => a.program.compareTo(b.program));
+    return list;
+  }
+
+  // ── Summary table helpers (indicator-aware) ────────────────────────────
+
+  /// Headers: all four indicators, or only the selected one.
+  List<String> _summaryHeaders(String first, {required bool withTotal}) => [
+        first,
+        if (_singleIndicator)
+          _selectedClassification
+        else ...[
+          'Underweight',
+          'Normal',
+          'Overweight',
+          'Obese',
+        ],
+        if (withTotal && !_singleIndicator) 'Total',
+      ];
+
+  List<String> _summaryCells(
+    String name,
+    int underweight,
+    int normal,
+    int overweight,
+    int obese,
+    int total, {
+    required bool withTotal,
+  }) {
+    if (_singleIndicator) {
+      final v = switch (_selectedClassification) {
+        'Underweight' => underweight,
+        'Normal' => normal,
+        'Overweight' => overweight,
+        _ => obese,
+      };
+      return [name, '$v'];
+    }
+    return [
+      name,
+      '$underweight',
+      '$normal',
+      '$overweight',
+      '$obese',
+      if (withTotal) '$total',
+    ];
+  }
+
+  // ── Academic year / semester helpers ───────────────────────────────────
+
+  static int _semRank(String s) {
+    final t = s.toLowerCase();
+    if (t.contains('summer')) return 3;
+    if (t.contains('1') || t.contains('first')) return 1;
+    if (t.contains('2') || t.contains('second')) return 2;
+    return 9;
+  }
+
+  List<String> get _availableAcadYears {
+    final years = <String>{};
+    for (final p in _periods) {
+      if (p.acadYear.isNotEmpty) years.add(p.acadYear);
+    }
+    for (final r in _allRecords) {
+      if (r.acadYear.isNotEmpty) years.add(r.acadYear);
+    }
+    return years.toList()..sort((a, b) => b.compareTo(a));
+  }
+
+  List<String> get _availableSemesters {
+    final sems = <String>{};
+    for (final p in _periods) {
+      if (p.acadYear == _selectedAcadYear && p.semester.isNotEmpty) {
+        sems.add(p.semester);
+      }
+    }
+    for (final r in _allRecords) {
+      if (r.acadYear == _selectedAcadYear && r.semester.isNotEmpty) {
+        sems.add(r.semester);
+      }
+    }
+    final list = sems.toList();
+    list.sort((a, b) {
+      final c = _semRank(a).compareTo(_semRank(b));
+      return c != 0 ? c : a.compareTo(b);
+    });
     return list;
   }
 
@@ -616,9 +769,11 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
   }
 
   Widget _statStrip() {
-    final total = _filteredRecords.length;
-    int count(String c) =>
-        _filteredRecords.where((r) => r.indicator == c).length;
+    // Counts use _scopeRecords so they do NOT change when a BMI indicator
+    // is picked in the dropdown.
+    final records = _filteredRecords;
+    final total = records.length;
+    int count(String c) => records.where((r) => r.indicator == c).length;
     final stats = <({String label, int value, Color color, IconData icon})>[
       (
         label: 'Total Students',
@@ -745,9 +900,10 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
 
   Widget _filterRow() {
     return LayoutBuilder(builder: (context, constraints) {
-      final isNarrow = constraints.maxWidth < 860;
+      final isNarrow = constraints.maxWidth < 1100;
       final search = _searchField();
       final date = _dateFilterControls();
+      final institute = _instituteSelector();
       final indicator = _indicatorFilter();
       if (isNarrow) {
         return Column(
@@ -759,7 +915,7 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
               spacing: 10,
               runSpacing: 10,
               crossAxisAlignment: WrapCrossAlignment.center,
-              children: [date, indicator],
+              children: [date, institute, indicator],
             ),
           ],
         );
@@ -769,6 +925,8 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
           Expanded(child: search),
           const SizedBox(width: 14),
           date,
+          const SizedBox(width: 10),
+          institute,
           const SizedBox(width: 10),
           indicator,
         ],
@@ -852,8 +1010,18 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
     final children = <Widget>[_dateModeDropdown()];
     Widget? extra;
     switch (_selectedDateFilter) {
-      case 'Year':
-        extra = _yearDropdown();
+      case 'Academic Year':
+        extra = Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _acadYearDropdown(),
+            // Semester only appears once a specific academic year is picked.
+            if (_selectedAcadYear != 'All') ...[
+              const SizedBox(width: 10),
+              _semesterDropdown(),
+            ],
+          ],
+        );
         break;
       case 'Date Range':
         final range = _pickedRange;
@@ -875,15 +1043,16 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
         break;
     }
     if (extra != null) children.addAll([const SizedBox(width: 10), extra]);
-    if (_selectedDateFilter != 'All') {
+    if (_selectedDateFilter != 'Today') {
       children.addAll([
         const SizedBox(width: 6),
         Tooltip(
-          message: 'Clear date filter',
+          message: 'Reset to today',
           child: InkWell(
             onTap: () => setState(() {
-              _selectedDateFilter = 'All';
-              _selectedYear = null;
+              _selectedDateFilter = 'Today';
+              _selectedAcadYear = 'All';
+              _selectedSemester = 'All';
               _pickedRange = null;
               _pickedDate = null;
               _applyFilters();
@@ -919,7 +1088,7 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
   Widget _dateModeDropdown() {
     final safe = _dateFilterModes.contains(_selectedDateFilter)
         ? _selectedDateFilter
-        : 'All';
+        : 'Today';
     return Container(
       height: 44,
       padding: const EdgeInsets.only(left: 14, right: 8),
@@ -927,7 +1096,7 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
         color: const Color(0xFFF1F5F9),
         borderRadius: BorderRadius.circular(25),
         border: Border.all(
-            color: _selectedDateFilter == 'All' ? kBorder : kPrimary),
+            color: _selectedDateFilter == 'Today' ? kBorder : kPrimary),
       ),
       child: DropdownButtonHideUnderline(
         child: DropdownButton<String>(
@@ -942,7 +1111,7 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
             for (final o in _dateFilterModes)
               DropdownMenuItem(
                 value: o,
-                child: Text(o == 'All' ? 'Date: All' : o),
+                child: Text(o == 'All' ? 'All' : o),
               ),
           ],
           onChanged: _onDateModeChanged,
@@ -958,9 +1127,12 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
       if (!mounted) return;
       setState(() {
         if (range != null) {
+          _pickedRange = range;
           _selectedDateFilter = 'Date Range';
         } else if (_pickedRange == null) {
-          _selectedDateFilter = 'All';
+          // Cancelled with nothing picked before: keep the previous mode.
+        } else {
+          _selectedDateFilter = 'Date Range';
         }
         _applyFilters();
       });
@@ -971,9 +1143,10 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
       if (!mounted) return;
       setState(() {
         if (day != null) {
+          _pickedDate = day;
           _selectedDateFilter = 'Pick Date';
-        } else if (_pickedDate == null) {
-          _selectedDateFilter = 'All';
+        } else if (_pickedDate != null) {
+          _selectedDateFilter = 'Pick Date';
         }
         _applyFilters();
       });
@@ -981,8 +1154,9 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
     }
     setState(() {
       _selectedDateFilter = v;
-      if (v == 'Year' && _selectedYear == null) {
-        _selectedYear = DateTime.now().year;
+      if (v == 'Academic Year') {
+        _selectedAcadYear = 'All';
+        _selectedSemester = 'All';
       }
       _applyFilters();
     });
@@ -1039,20 +1213,13 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
     });
   }
 
-  List<int> get _availableYears {
-    final years = <int>{};
-    for (final r in _allRecords) {
-      final d = r.visitDate;
-      if (d != null) years.add(d.year);
-    }
-    years.add(DateTime.now().year);
-    return years.toList()..sort((a, b) => b.compareTo(a));
-  }
-
-  Widget _yearDropdown() {
-    final years = _availableYears;
-    final safe =
-        years.contains(_selectedYear) ? _selectedYear : DateTime.now().year;
+  Widget _whiteDropdown({
+    required String value,
+    required List<String> options,
+    required String allLabel,
+    required ValueChanged<String> onChanged,
+  }) {
+    final safe = options.contains(value) ? value : 'All';
     return Container(
       height: 44,
       padding: const EdgeInsets.only(left: 14, right: 8),
@@ -1062,7 +1229,7 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
         border: Border.all(color: kPrimary),
       ),
       child: DropdownButtonHideUnderline(
-        child: DropdownButton<int>(
+        child: DropdownButton<String>(
           value: safe,
           isDense: true,
           borderRadius: BorderRadius.circular(12),
@@ -1071,18 +1238,43 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
           style: const TextStyle(
               fontSize: 12.5, fontWeight: FontWeight.w600, color: kTextMain),
           items: [
-            for (final y in years)
-              DropdownMenuItem(value: y, child: Text('$y')),
+            for (final o in options)
+              DropdownMenuItem(
+                value: o,
+                child: Text(o == 'All' ? allLabel : o),
+              ),
           ],
           onChanged: (v) {
             if (v == null) return;
-            setState(() {
-              _selectedYear = v;
-              _applyFilters();
-            });
+            onChanged(v);
           },
         ),
       ),
+    );
+  }
+
+  Widget _acadYearDropdown() {
+    return _whiteDropdown(
+      value: _selectedAcadYear,
+      options: ['All', ..._availableAcadYears],
+      allLabel: 'All Years',
+      onChanged: (v) => setState(() {
+        _selectedAcadYear = v;
+        _selectedSemester = 'All';
+        _applyFilters();
+      }),
+    );
+  }
+
+  Widget _semesterDropdown() {
+    return _whiteDropdown(
+      value: _selectedSemester,
+      options: ['All', ..._availableSemesters],
+      allLabel: 'All Semesters',
+      onChanged: (v) => setState(() {
+        _selectedSemester = v;
+        _applyFilters();
+      }),
     );
   }
 
@@ -1128,63 +1320,44 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
   }
 
   Widget _summarySection() {
+    final showInstituteSummary = _selectedInstitute == 'All';
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _sectionHeader(
-          'Summary by Institute',
-          'Student count per BMI classification, grouped by institute',
-          icon: Icons.apartment_rounded,
-          trailing: _instituteSelector(),
-        ),
-        const SizedBox(height: 10),
-        _summaryTable(
-          headers: const [
-            'Institute',
-            'Underweight',
-            'Normal',
-            'Overweight',
-            'Obese',
-            'Total'
-          ],
-          rows: [
-            for (final s in _instituteSummaries)
-              [
-                s.institute,
-                '${s.underweight}',
-                '${s.normal}',
-                '${s.overweight}',
-                '${s.obese}',
-                '${s.total}',
-              ],
-          ],
-        ),
-        const SizedBox(height: 22),
+        // Summary by Institute only when no specific institute is picked.
+        if (showInstituteSummary) ...[
+          _sectionHeader(
+            'Summary by Institute',
+            'Student count per BMI classification, grouped by institute',
+            icon: Icons.apartment_rounded,
+          ),
+          const SizedBox(height: 10),
+          _summaryTable(
+            headers: _summaryHeaders('Institute', withTotal: true),
+            rows: [
+              for (final s in _instituteSummaries)
+                _summaryCells(s.institute, s.underweight, s.normal,
+                    s.overweight, s.obese, s.total,
+                    withTotal: true),
+            ],
+          ),
+          const SizedBox(height: 22),
+        ],
         _sectionHeader(
           'Summary by Program',
-          'Student count per BMI classification, grouped by program',
+          showInstituteSummary
+              ? 'Student count per BMI classification, grouped by program'
+              : 'Student count per BMI classification — $_selectedInstitute',
           icon: Icons.school_rounded,
         ),
         const SizedBox(height: 10),
         _summaryTable(
-          headers: const [
-            'Program',
-            'Underweight',
-            'Normal',
-            'Overweight',
-            'Obese',
-            'Total'
-          ],
+          headers: _summaryHeaders('Program', withTotal: true),
           rows: [
             for (final s in _programSummaries)
-              [
-                s.program,
-                '${s.underweight}',
-                '${s.normal}',
-                '${s.overweight}',
-                '${s.obese}',
-                '${s.total}',
-              ],
+              _summaryCells(s.program, s.underweight, s.normal, s.overweight,
+                  s.obese, s.total,
+                  withTotal: true),
           ],
         ),
       ],
@@ -1239,10 +1412,11 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
     final safe =
         options.contains(_selectedInstitute) ? _selectedInstitute : 'All';
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12),
+      height: 44,
+      padding: const EdgeInsets.only(left: 14, right: 8),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
+        color: const Color(0xFFF1F5F9),
+        borderRadius: BorderRadius.circular(25),
         border:
             Border.all(color: _selectedInstitute == 'All' ? kBorder : kPrimary),
       ),
@@ -1259,7 +1433,7 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
             for (final o in options)
               DropdownMenuItem(
                 value: o,
-                child: Text(o == 'All' ? 'All Institutes' : o),
+                child: Text(o == 'All' ? 'Institute: All' : o),
               ),
           ],
           onChanged: (v) {
@@ -1617,12 +1791,67 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
     });
   }
 
+  // ── Print: date label ──────────────────────────────────────────────────
+
+  String _rangeText(DateTime a, DateTime b) {
+    final sameDay = a.year == b.year && a.month == b.month && a.day == b.day;
+    if (sameDay) return _fmtDate(a);
+    return _compactRangeLabel(DateTimeRange(start: a, end: b));
+  }
+
+  /// "Nov 2, 2026" for a single day, "Jan 1 – Nov 2, 2026" for a range.
+  /// When the date filter is "All" the range is taken from the first to the
+  /// last visit date of the printed records (the word "All" is never shown).
+  String _printDateLabel(List<BmiRecord> records) {
+    final now = DateTime.now();
+    switch (_selectedDateFilter) {
+      case 'Today':
+        return _fmtDate(now);
+      case 'This Week':
+        final start = DateTime(now.year, now.month, now.day)
+            .subtract(Duration(days: now.weekday - 1));
+        return _rangeText(start, start.add(const Duration(days: 6)));
+      case 'This Month':
+        return _rangeText(
+            DateTime(now.year, now.month, 1), DateTime(now.year, now.month + 1, 0));
+      case 'Date Range':
+        final r = _pickedRange;
+        return r == null ? '' : _rangeText(r.start, r.end);
+      case 'Pick Date':
+        final d = _pickedDate;
+        return d == null ? '' : _fmtDate(d);
+      case 'Academic Year':
+        if (_selectedAcadYear != 'All') {
+          var label = 'A.Y. $_selectedAcadYear';
+          if (_selectedSemester != 'All') {
+            final t = _selectedSemester.toLowerCase();
+            final sem = (t.contains('sem') || t.contains('summer'))
+                ? _selectedSemester
+                : '$_selectedSemester Semester';
+            label += ' – $sem';
+          }
+          return label;
+        }
+        break;
+    }
+    // "All" (or "Academic Year → All Years"): first → last visit date.
+    final dates = [
+      for (final r in records)
+        if (r.visitDate != null) r.visitDate!
+    ]..sort();
+    if (dates.isEmpty) return '';
+    return _rangeText(dates.first, dates.last);
+  }
+
   Future<pw.Document> _buildDocument(
       {required PdfPageFormat pageFormat}) async {
     final doc = pw.Document();
     final records = _filteredRecords;
     final byInstitute = _summarizeByInstitute(records);
     final byProgram = _summarizeByProgram(records);
+    final showInstituteSummary = _selectedInstitute == 'All';
+    final dateLabel =
+        _printDateLabel(records).replaceAll('—', '-').replaceAll('–', '-');
 
     final DocMetrics metrics = DocMetrics(pageFormat);
     final String headerSvg = await loadSheetHeaderSvg();
@@ -1641,50 +1870,38 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
         build: (pw.Context context) => [
           pw.SizedBox(height: 6),
           _printTitleBlock(context, pageFormat.width),
-          pw.SizedBox(height: 16),
+          pw.SizedBox(height: 10),
+          _printInfoBlock(''),
+          pw.SizedBox(height: 10),
           _printStatStrip(records),
+          if (dateLabel.isNotEmpty) ...[
+            pw.SizedBox(height: 8),
+            _printDateLine(dateLabel),
+          ],
           pw.SizedBox(height: 16),
-          _printSectionTitle('SUMMARY BY INSTITUTE'),
-          pw.SizedBox(height: 6),
-          _printTable(
-            headers: const [
-              'Institute',
-              'Underweight',
-              'Normal',
-              'Overweight',
-              'Obese',
-            ],
-            rows: [
-              for (final s in byInstitute)
-                [
-                  s.institute,
-                  '${s.underweight}',
-                  '${s.normal}',
-                  '${s.overweight}',
-                  '${s.obese}',
-                ],
-            ],
-          ),
-          pw.SizedBox(height: 16),
+          if (showInstituteSummary) ...[
+            _printSectionTitle('SUMMARY BY INSTITUTE'),
+            pw.SizedBox(height: 6),
+            _printTable(
+              headers: _summaryHeaders('Institute', withTotal: false),
+              rows: [
+                for (final s in byInstitute)
+                  _summaryCells(s.institute, s.underweight, s.normal,
+                      s.overweight, s.obese, s.total,
+                      withTotal: false),
+              ],
+            ),
+            pw.SizedBox(height: 16),
+          ],
           _printSectionTitle('SUMMARY BY PROGRAM'),
           pw.SizedBox(height: 6),
           _printTable(
-            headers: const [
-              'Program',
-              'Underweight',
-              'Normal',
-              'Overweight',
-              'Obese',
-            ],
+            headers: _summaryHeaders('Program', withTotal: false),
             rows: [
               for (final s in byProgram)
-                [
-                  s.program,
-                  '${s.underweight}',
-                  '${s.normal}',
-                  '${s.overweight}',
-                  '${s.obese}',
-                ],
+                _summaryCells(s.program, s.underweight, s.normal, s.overweight,
+                    s.obese, s.total,
+                    withTotal: false),
             ],
           ),
           pw.SizedBox(height: 16),
@@ -1743,6 +1960,78 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
     );
   }
 
+  /// Right-aligned block under the "BMI RECORDS" title, above the counts:
+  ///   Institute: <name>   (only when an institute is selected)
+  ///   Date: <date / date range>
+  pw.Widget _printInfoBlock(String dateLabel) {
+    final inst = _selectedInstitute == 'All' ? '' : _selectedInstitute;
+    if (inst.isEmpty && dateLabel.isEmpty) return pw.SizedBox();
+
+    return pw.Column(
+      crossAxisAlignment: pw.CrossAxisAlignment.stretch,
+      children: [
+        // Institute name: centered under "BMI RECORDS", green, no label.
+        if (inst.isNotEmpty)
+          pw.Align(
+            alignment: pw.Alignment.center,
+            child: pw.Text(
+              inst,
+              textAlign: pw.TextAlign.center,
+              style: pw.TextStyle(
+                font: pw.Font.timesBold(),
+                fontWeight: pw.FontWeight.bold,
+                fontSize: 17,
+                color: _sheetGreen,
+              ),
+            ),
+          ),
+        if (inst.isNotEmpty && dateLabel.isNotEmpty) pw.SizedBox(height: 8),
+        if (dateLabel.isNotEmpty)
+          pw.Align(
+            alignment: pw.Alignment.centerRight,
+            child: pw.RichText(
+              text: pw.TextSpan(
+                style: const pw.TextStyle(fontSize: 9, color: PdfColors.black),
+                children: [
+                  pw.TextSpan(
+                    text: 'Date: ',
+                    style: pw.TextStyle(
+                      fontSize: 9,
+                      fontWeight: pw.FontWeight.bold,
+                      color: PdfColors.black,
+                    ),
+                  ),
+                  pw.TextSpan(text: dateLabel),
+                ],
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  pw.Widget _printDateLine(String dateLabel) {
+    return pw.Align(
+      alignment: pw.Alignment.centerRight,
+      child: pw.RichText(
+        text: pw.TextSpan(
+          style: const pw.TextStyle(fontSize: 9, color: PdfColors.black),
+          children: [
+            pw.TextSpan(
+              text: 'Date: ',
+              style: pw.TextStyle(
+                fontSize: 9,
+                fontWeight: pw.FontWeight.bold,
+                color: PdfColors.black,
+              ),
+            ),
+            pw.TextSpan(text: dateLabel),
+          ],
+        ),
+      ),
+    );
+  }
+
   pw.Widget _printTitleBlock(pw.Context context, double pageWidth) {
     final double unit = pageWidth / 1545;
     final regular = pw.Font.times();
@@ -1787,7 +2076,8 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
 
   pw.Widget _printStatStrip(List<BmiRecord> records) {
     int count(String c) => records.where((r) => r.indicator == c).length;
-    final stats = <({String label, int value, PdfColor tint, PdfColor ink})>[
+    final allStats =
+        <({String label, int value, PdfColor tint, PdfColor ink})>[
       (
         label: 'Total Students',
         value: records.length,
@@ -1819,6 +2109,10 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
         ink: PdfColor.fromInt(0xFFB91C1C),
       ),
     ];
+    // When one BMI indicator is selected, print only that indicator's count.
+    final stats = _singleIndicator
+        ? allStats.where((s) => s.label == _selectedClassification).toList()
+        : allStats;
     return pw.Row(
       mainAxisAlignment: pw.MainAxisAlignment.center,
       children: [
@@ -1861,8 +2155,14 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
     required List<String> headers,
     required List<List<String>> rows,
   }) {
-    final data =
-        rows.isEmpty ? [List<String>.filled(headers.length, '')] : rows;
+    // The PDF Times font has no en/em dash glyph (it prints as a box), so
+    // use a plain hyphen in the printout.
+    String safe(String s) => s.replaceAll('—', '-').replaceAll('–', '-');
+    final data = rows.isEmpty
+        ? [List<String>.filled(headers.length, '')]
+        : [
+            for (final r in rows) [for (final c in r) safe(c)],
+          ];
     return pw.Container(
       foregroundDecoration: pw.BoxDecoration(
         border: pw.Border.all(color: PdfColors.black, width: 0.7),

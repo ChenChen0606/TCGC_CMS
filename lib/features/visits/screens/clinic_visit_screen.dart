@@ -5,8 +5,8 @@ import 'package:intl/intl.dart';
 import 'package:clinicmanagementsystem/features/patients/models/patient_directory.dart';
 import 'package:clinicmanagementsystem/features/visits/models/visit_details.dart';
 import 'package:clinicmanagementsystem/features/vitals/models/vitals.dart';
-
 import 'package:clinicmanagementsystem/features/visits/models/visit_times.dart';
+import 'package:clinicmanagementsystem/core/services/time_service.dart';
 import 'package:clinicmanagementsystem/features/account/services/account_service.dart';
 import 'package:clinicmanagementsystem/core/services/data_tracker.dart';
 import 'package:clinicmanagementsystem/features/patients/services/individual_record_service.dart';
@@ -106,6 +106,19 @@ class _ClinicVisitScreenState extends State<ClinicVisitScreen> {
 
   DateTime? _checkedInAt;
 
+    DateTime? _timeOutAt; // null = not edited -> server time when saved
+  bool _timeInEdited = false;
+  Duration _serverOffset = Duration.zero;
+
+  DateTime _serverNow() => widget.clock().add(_serverOffset);
+
+  Future<void> _syncServerClock() async {
+    try {
+      final server = await TimeService.serverNow();
+      _serverOffset = server.difference(widget.clock());
+    } catch (_) {}
+  }
+
   String get _timeInText =>
       _checkedInAt == null ? '' : VisitTimes.clock(_checkedInAt!);
 
@@ -139,7 +152,9 @@ class _ClinicVisitScreenState extends State<ClinicVisitScreen> {
   @override
   void initState() {
     super.initState();
+    _syncServerClock();     //???
     _loadDirectory();
+    
     if (_isEditing) _seedEditMode();
 
     _directoryListener = () {
@@ -343,18 +358,19 @@ class _ClinicVisitScreenState extends State<ClinicVisitScreen> {
     }
     return 'Complete the previous step first.';
   }
-
   Future<void> _selectVisitor(ClinicProfile p) async {
     final changed = _visitor?.id != p.id;
+    if (changed) await _syncServerClock();
+    if (!mounted) return;
     setState(() {
       _visitor = p;
-
       _patientUuid = p.id;
 
       if (changed) {
         _clearServices();
-
-        _checkedInAt = widget.clock();
+        _checkedInAt = _serverNow();
+        _timeInEdited = false;
+        _timeOutAt = null;
       }
     });
   }
@@ -388,7 +404,7 @@ class _ClinicVisitScreenState extends State<ClinicVisitScreen> {
         (t.isNotEmpty && _keywordTriggersProcedure(t));
   }
 
-  Future<void> _completeConsultation() async {
+    Future<void> _completeConsultation() async {
     final v = _visitor;
     if (v == null || !_hasServices) {
       _toast('Pick a visitor and tick at least one service first.', kWarning);
@@ -412,12 +428,18 @@ class _ClinicVisitScreenState extends State<ClinicVisitScreen> {
     final name = v.middleInitial.isEmpty
         ? '${v.lastName}, ${v.firstName}'
         : '${v.lastName}, ${v.firstName} ${v.middleInitial}';
-    final nowStamp = widget.clock();
 
-    final timeIn = _timeInText;
-    final timeOut = VisitTimes.clock(nowStamp);
+    // Preview for the dialog (server clock; Time Out re-read when saving).
+    final previewNow = await TimeService.serverNow();
+    if (!mounted) return;
+    final previewIn = _checkedInAt ?? previewNow;
+    final previewOut = _timeOutAt ?? previewNow;
+    if (!_isEditing && VisitTimes.outBeforeIn(previewIn, previewOut)) {
+      _toast(VisitTimes.outBeforeInMessage, kDanger);
+      _goToStep(1);
+      return;
+    }
 
-    final stay = VisitTimes.stayBetween(_checkedInAt, nowStamp);
     final complaint = _complaintText;
     final needsProcedure = _requiresProcedure;
 
@@ -427,10 +449,9 @@ class _ClinicVisitScreenState extends State<ClinicVisitScreen> {
       category: v.category,
       affiliation: v.affiliationLabel,
       complaint: complaint,
-      visitDate: DateFormat('MMM d, yyyy').format(nowStamp),
-      visitTime: timeIn,
-      timeOut: timeOut,
-      stay: stay,
+      timeIn: VisitTimes.stamp(previewIn),
+      timeOut: VisitTimes.stamp(previewOut),
+      stay: VisitTimes.stayBetween(previewIn, previewOut),
       needsProcedure: needsProcedure,
       editing: _isEditing,
     );
@@ -458,6 +479,17 @@ class _ClinicVisitScreenState extends State<ClinicVisitScreen> {
       return;
     }
 
+    // Unedited values come from the Supabase server clock at the moment of saving.
+    final saveNow = await TimeService.serverNow();
+    if (!mounted) return;
+    final timeInAt = _checkedInAt ?? saveNow;
+    final timeOutAt = _timeOutAt ?? saveNow;
+    if (VisitTimes.outBeforeIn(timeInAt, timeOutAt)) {
+      _toast(VisitTimes.outBeforeInMessage, kDanger);
+      _goToStep(1);
+      return;
+    }
+
     setState(() => _saving = true);
     final String? patientUuid = _patientUuid;
     Visit? savedVisit;
@@ -471,8 +503,9 @@ class _ClinicVisitScreenState extends State<ClinicVisitScreen> {
         yearPosition: v.isStudent ? v.yearLevel : v.position,
         complaint: complaint,
         reasonForVisit: _reasonForVisitCtrl.text.trim(),
-        visitDate: nowStamp,
-        visitTime: timeIn,
+        visitDate: timeInAt,
+        visitTime: VisitTimes.clock(timeInAt),
+        timeOut: timeOutAt,
       );
     } catch (e) {
       if (!mounted) return;
@@ -500,8 +533,8 @@ class _ClinicVisitScreenState extends State<ClinicVisitScreen> {
     required String category,
     required String affiliation,
     required String complaint,
-    required String visitDate,
-    required String visitTime,
+   // required String visitDate,  //??
+    required String timeIn,
     required String timeOut,
     String? stay,
     required bool needsProcedure,
@@ -528,8 +561,8 @@ class _ClinicVisitScreenState extends State<ClinicVisitScreen> {
               VisitReviewRow("Role", category),
               VisitReviewRow("Affiliation", affiliation),
               VisitReviewRow("Service", complaint),
-              VisitReviewRow("Date", visitDate),
-              VisitReviewRow("Time in", visitTime),
+          //    VisitReviewRow("Date", visitDate),
+              VisitReviewRow("Time in", timeIn),
               if (!editing) ...[
                 VisitReviewRow("Time out", timeOut),
                 if (stay != null) VisitReviewRow("Stay length", stay),
@@ -566,6 +599,8 @@ class _ClinicVisitScreenState extends State<ClinicVisitScreen> {
       _patientUuid = null;
 
       _checkedInAt = null;
+      _timeOutAt = null;
+      _timeInEdited = false;
       _clearServices();
       _searchCtrl.clear();
       _reasonForVisitCtrl.clear();
@@ -1863,7 +1898,7 @@ class _ClinicVisitScreenState extends State<ClinicVisitScreen> {
 
   Widget _visitInformationCard() {
     final v = _visitor;
-    final now = DateTime.now();
+   // final now = DateTime.now();
     final count = _selectedServiceIds.length;
 
     return _panel(
@@ -1878,19 +1913,7 @@ class _ClinicVisitScreenState extends State<ClinicVisitScreen> {
             _stepTwoVisitorSummary(v),
             const SizedBox(height: 12),
           ],
-          Row(
-            children: [
-              Expanded(
-                child: _visitInfoColumn(Icons.calendar_today_outlined, 'Date',
-                    DateFormat('MMM d, yyyy').format(now)),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: _visitInfoColumn(Icons.schedule_outlined, 'Time',
-                    DateFormat('hh:mm a').format(now)),
-              ),
-            ],
-          ),
+          _timeRow(),
           const SizedBox(height: 12),
           const Divider(color: kBorder, height: 1),
           const SizedBox(height: 12),
@@ -1951,34 +1974,152 @@ class _ClinicVisitScreenState extends State<ClinicVisitScreen> {
       ),
     );
   }
-
-  Widget _visitInfoColumn(IconData icon, String label, String value) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      decoration: BoxDecoration(
-        color: AppColors.bg,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: kBorder),
+  Widget _timeRow() {
+    final inAt = _checkedInAt ?? _serverNow();
+    final outAt = _timeOutAt ?? _serverNow();
+    return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Expanded(
+        child: _timeTile(
+          key: const ValueKey('time_in_tile'),
+          icon: Icons.login_rounded,
+          label: 'Time In',
+          value: inAt,
+          auto: !_timeInEdited,
+          locked: _isEditing,
+          onTap: () => _pickTime(isIn: true),
+          onReset: () => setState(() {
+            _checkedInAt = _serverNow();
+            _timeInEdited = false;
+          }),
+        ),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(children: [
-            Icon(icon, size: 16, color: kPrimary),
-            const SizedBox(width: 6),
-            Text(label,
-                style: const TextStyle(fontSize: 11.5, color: kTextSub)),
-          ]),
-          const SizedBox(height: 4),
-          Text(value,
-              style: const TextStyle(
-                  fontSize: 13.5,
-                  fontWeight: FontWeight.w700,
-                  color: kTextMain)),
-        ],
+      if (!_isEditing) ...[
+        const SizedBox(width: 12),
+        Expanded(
+          child: _timeTile(
+            key: const ValueKey('time_out_tile'),
+            icon: Icons.logout_rounded,
+            label: 'Time Out',
+            value: outAt,
+            auto: _timeOutAt == null,
+            locked: false,
+            onTap: () => _pickTime(isIn: false),
+            onReset: () => setState(() => _timeOutAt = null),
+          ),
+        ),
+      ],
+    ]);
+  }
+
+  Widget _timeTile({
+    Key? key,
+    required IconData icon,
+    required String label,
+    required DateTime value,
+    required bool auto,
+    required bool locked,
+    required VoidCallback onTap,
+    required VoidCallback onReset,
+  }) {
+    return InkWell(
+      key: key,
+      onTap: locked ? null : onTap,
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: AppColors.bg,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: kBorder),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(children: [
+              Icon(icon, size: 16, color: kPrimary),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(label,
+                    style: const TextStyle(fontSize: 11.5, color: kTextSub)),
+              ),
+              if (locked)
+                const Icon(Icons.lock_outline, size: 13, color: kTextMuted)
+              else if (!auto)
+                InkWell(
+                  onTap: onReset,
+                  child: const Tooltip(
+                    message: 'Use the current time again',
+                    child: Icon(Icons.restart_alt_rounded,
+                        size: 15, color: kTextMuted),
+                  ),
+                )
+              else
+                const Icon(Icons.edit_calendar_outlined,
+                    size: 14, color: kTextMuted),
+            ]),
+            const SizedBox(height: 4),
+            Text(VisitTimes.date(value),
+                style: const TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w600,
+                    color: kTextSub)),
+            Text(VisitTimes.clock(value),
+                style: const TextStyle(
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w700,
+                    color: kTextMain)),
+            if (auto && !locked)
+              const Text('Auto · tap to edit',
+                  style: TextStyle(fontSize: 10.5, color: kTextMuted)),
+          ],
+        ),
       ),
     );
   }
+
+  Future<void> _pickTime({required bool isIn}) async {
+    final current =
+        isIn ? (_checkedInAt ?? _serverNow()) : (_timeOutAt ?? _serverNow());
+    final today = _serverNow();
+
+    final day = await showDatePicker(
+      context: context,
+      initialDate: current,
+      firstDate: DateTime(2000),
+      lastDate: DateTime(today.year + 1, 12, 31),
+    );
+    if (day == null || !mounted) return;
+
+    final time = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.fromDateTime(current),
+      builder: (ctx, child) => MediaQuery(
+        data: MediaQuery.of(ctx).copyWith(alwaysUse24HourFormat: false),
+        child: child!,
+      ),
+    );
+    if (time == null || !mounted) return;
+
+    final picked = VisitTimes.combine(day, time.hour, time.minute);
+
+    if (isIn) {
+      if (VisitTimes.outBeforeIn(picked, _timeOutAt)) {
+        _toast(VisitTimes.outBeforeInMessage, kDanger);
+        return;
+      }
+      setState(() {
+        _checkedInAt = picked;
+        _timeInEdited = true;
+      });
+    } else {
+      if (VisitTimes.outBeforeIn(_checkedInAt, picked)) {
+        _toast(VisitTimes.outBeforeInMessage, kDanger);
+        return;
+      }
+      setState(() => _timeOutAt = picked);
+    }
+  }
+ 
 
   Widget _selectedServiceRow(String id) {
     final label = _serviceLabel(id);
@@ -2147,11 +2288,18 @@ class _ClinicVisitScreenState extends State<ClinicVisitScreen> {
                   const SizedBox(height: 14),
                   _serviceDetailGroups(),
                   const SizedBox(height: 14),
-                  VisitReviewCard(title: 'Record', lines: [
-                    VisitReviewLine.pair('Date',
-                        DateFormat('MMM d, yyyy').format(DateTime.now())),
-                    VisitReviewLine.pair('Time in', _timeInText),
-                    VisitReviewLine.pair('Time out', 'On completion'),
+                   VisitReviewCard(title: 'Record', lines: [
+                    VisitReviewLine.pair(
+                        'Time in',
+                        _checkedInAt == null
+                            ? '—'
+                            : VisitTimes.stamp(_checkedInAt!)),
+                    if (!_isEditing)
+                      VisitReviewLine.pair(
+                          'Time out',
+                          _timeOutAt == null
+                              ? 'Server time on completion'
+                              : VisitTimes.stamp(_timeOutAt!)),
                     VisitReviewLine.pair('Recorded by', _currentUserName),
                   ]),
                   if (_patientUuid == null) ...[

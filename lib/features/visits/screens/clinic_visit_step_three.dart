@@ -1588,6 +1588,10 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
                       label: o,
                       checked: chosen.contains(o),
                       onTap: () {
+                        if (f.key == kVitalsSelectedKey) {
+                          _toggleVitalChoice(d, f, o, key);
+                          return;
+                        }
                         _c.toggleChoice(d.serviceId, f.key, o);
                         _naggedField = key;
                         _autoCompleteIfValid(d);
@@ -1667,6 +1671,23 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
     return _texts.putIfAbsent(key, () => TextEditingController());
   }
 
+    void _toggleVitalChoice(
+      ServiceDraft d, ServiceField f, String option, String key) {
+    final current = d.chosen(f.key).toSet();
+    final all = kVitalChoiceKeys.keys.toSet();
+    Set<String> next;
+    if (option == kSelectAllLabel) {
+      next = all.every(current.contains) ? <String>{} : all;
+    } else {
+      next = {...current}..remove(kSelectAllLabel);
+      if (!next.remove(option)) next.add(option);
+    }
+    _c.setVitalSelection(d.serviceId, next);
+    _naggedField = key;
+    _autoCompleteIfValid(d);
+    setState(() {});
+  }
+  
   void _addCustomEntry(ServiceDraft d, ServiceField f) {
     final box = _customTextFor(d, f);
     final typed = box.text.trim();

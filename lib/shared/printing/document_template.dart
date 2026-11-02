@@ -707,7 +707,7 @@ const String _sheetHeaderSvg =
   <circle cx="160" cy="150" r="125" fill="#FFFFFF"/>
   <image href="LOGO_ASSET" x="40" y="30" width="240" height="240" preserveAspectRatio="xMidYMid meet"/>
   <text x="952" y="118" fill="#FFFFFF" font-family="Times New Roman, serif" font-weight="bold" font-size="32" textLength="534" lengthAdjust="spacingAndGlyphs">TANGUB CITY GLOBAL COLLEGE</text>
-  <text x="1486" y="146" text-anchor="end" fill="#FFFFFF" font-family="Times New Roman, serif" font-style="italic" font-size="21">Formerly GADC</text>
+  <text x="1486" y="146" text-anchor="end" fill="#FFFFFF" font-family="Times New Roman, serif" font-style="italic" font-size="21">Formerly GADTC</text>
 </svg>''';
 
 Future<String> loadSheetHeaderSvg() async {

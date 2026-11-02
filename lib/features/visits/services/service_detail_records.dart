@@ -422,33 +422,59 @@ Map<String, dynamic>? buildServiceRecord({
         'needs_referral': needsReferral,
         'referral_reasons': reasons.isEmpty ? null : jsonEncode(reasons),
       };
-    case 'vital_signs':
-      final bp = VitalClassifier.classifyBp(vitals.systolic, vitals.diastolic);
-      final temp = VitalClassifier.classifyTemp(vitals.tempC);
-      final pulse = VitalClassifier.classifyPulse(vitals.heartRate);
-      final resp = VitalClassifier.classifyResp(vitals.respRate);
-      final spo2 = VitalClassifier.classifySpo2(vitals.o2Sat);
+        case 'vital_signs':
+      // Only ticked vitals are saved; unticked ones go in as NULL.
+      // Old visits (nothing ticked) keep every value they have.
+      final vsPicked = d.chosen(kVitalsSelectedKey).toSet();
+      bool vsOn(String choice) => vsPicked.isEmpty || vsPicked.contains(choice);
+
+      final vsSys = vsOn('Blood Pressure') ? vitals.systolic : null;
+      final vsDia = vsOn('Blood Pressure') ? vitals.diastolic : null;
+      final vsTemp = vsOn('Temperature') ? vitals.tempC : null;
+      final vsPulse = vsOn('Pulse') ? vitals.heartRate : null;
+      final vsResp = vsOn('Respiratory Rate') ? vitals.respRate : null;
+      final vsSpo2 = vsOn('O₂ Saturation') ? vitals.o2Sat : null;
+      final vsHeight = vsOn('Weight / Height') ? vitals.heightCm : null;
+      final vsWeight = vsOn('Weight / Height') ? vitals.weightKg : null;
+
+      final vsBp = VitalClassifier.classifyBp(vsSys, vsDia);
+      final vsTempClass = VitalClassifier.classifyTemp(vsTemp);
+      final vsPulseClass = VitalClassifier.classifyPulse(vsPulse);
+      final vsRespClass = VitalClassifier.classifyResp(vsResp);
+      final vsSpo2Class = VitalClassifier.classifySpo2(vsSpo2);
+      final vsAnyVital = vsSys != null ||
+          vsDia != null ||
+          vsTemp != null ||
+          vsPulse != null ||
+          vsResp != null ||
+          vsSpo2 != null ||
+          vsHeight != null ||
+          vsWeight != null;
       return {
-        'systolic': _vitalNum(vitals.systolic),
-        'diastolic': _vitalNum(vitals.diastolic),
-        'pulse_rate': _vitalNum(vitals.heartRate),
-        'temperature': _vitalNum(vitals.tempC),
-        'temp_method': _textOrNull(d, 'method'),
-        'respiratory_rate': _vitalNum(vitals.respRate),
-        'spo2': _vitalNum(vitals.o2Sat),
-        'arm': _listOrNull(d, 'arm_used'),
-        'position': _listOrNull(d, 'position'),
-        'bp_classification': bp?.label,
-        'bp_band': bp?.band.name,
-        'temperature_classification': temp?.label,
-        'temperature_band': temp?.band.name,
-        'pulse_classification': pulse?.label,
-        'pulse_band': pulse?.band.name,
-        'respiratory_classification': resp?.label,
-        'respiratory_band': resp?.band.name,
-        'spo2_classification': spo2?.label,
-        'spo2_band': spo2?.band.name,
-        'measured_at': vitals.measuredAt?.toIso8601String(),
+        'systolic': _vitalNum(vsSys),
+        'diastolic': _vitalNum(vsDia),
+        'pulse_rate': _vitalNum(vsPulse),
+        'temperature': _vitalNum(vsTemp),
+        'temp_method':
+            vsOn('Temperature') ? _textOrNull(d, 'method') : null,
+        'respiratory_rate': _vitalNum(vsResp),
+        'spo2': _vitalNum(vsSpo2),
+        'height_cm': _vitalNum(vsHeight),
+        'weight_kg': _vitalNum(vsWeight),
+        'arm': vsOn('Blood Pressure') ? _listOrNull(d, 'arm_used') : null,
+        'position': vsOn('Blood Pressure') ? _listOrNull(d, 'position') : null,
+        'bp_classification': vsBp?.label,
+        'bp_band': vsBp?.band.name,
+        'temperature_classification': vsTempClass?.label,
+        'temperature_band': vsTempClass?.band.name,
+        'pulse_classification': vsPulseClass?.label,
+        'pulse_band': vsPulseClass?.band.name,
+        'respiratory_classification': vsRespClass?.label,
+        'respiratory_band': vsRespClass?.band.name,
+        'spo2_classification': vsSpo2Class?.label,
+        'spo2_band': vsSpo2Class?.band.name,
+        'measured_at':
+            vsAnyVital ? vitals.measuredAt?.toIso8601String() : null,
         if (recordedBy != null && recordedBy.isNotEmpty)
           'recorded_by': recordedBy,
         'action_taken': _vitalActionsOrNull(d),
@@ -784,6 +810,26 @@ void applyServiceRecordTo({
       _setStr(data, 'method', row['temp_method']);
       _setNum(data, 'resp_rate', row['respiratory_rate']);
       _setNum(data, 'o2_sat', row['spo2']);
+            _setNum(data, 'height_cm', row['height_cm']);
+      _setNum(data, 'weight_kg', row['weight_kg']);
+
+      // Rebuild the tick-boxes from whichever columns have a value.
+      final vsTicked = <String>[
+        if (row['systolic'] != null || row['diastolic'] != null)
+          'Blood Pressure',
+        if (row['temperature'] != null) 'Temperature',
+        if (row['pulse_rate'] != null) 'Pulse',
+        if (row['respiratory_rate'] != null) 'Respiratory Rate',
+        if (row['height_cm'] != null || row['weight_kg'] != null)
+          'Weight / Height',
+        if (row['spo2'] != null) 'O₂ Saturation',
+      ];
+      if (vsTicked.isNotEmpty) {
+        data[kVitalsSelectedKey] = [
+          if (vsTicked.length == kVitalChoices.length) kSelectAllLabel,
+          ...vsTicked,
+        ];
+      }
       _readList(data, 'position', row['position']);
       _readList(data, 'arm_used', row['arm']);
       _applyVitalActions(data, row['action_taken']);

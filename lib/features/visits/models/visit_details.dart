@@ -208,7 +208,8 @@ class ServiceDraft {
       return;
     }
     final answered = spec.isAnswered(data);
-    final anything = data.entries.any((e) => '${e.value}'.trim().isNotEmpty);
+        final anything = data.entries
+        .any((e) => e.value != null && '${e.value}'.trim().isNotEmpty);
     status = answered
         ? ServiceDraftStatus.completed
         : (anything
@@ -580,6 +581,39 @@ class VisitDetailsController extends ChangeNotifier {
       return;
     }
     return;
+  }
+
+    /// Applies the vital-sign tick-boxes. Unticked vitals are cleared to null.
+  void setVitalSelection(String serviceId, Iterable<String> requested) {
+    final d = draftFor(serviceId);
+    if (d == null) return;
+
+    final chosen = <String>{
+      for (final c in requested)
+        if (kVitalChoiceKeys.containsKey(c)) c,
+    };
+
+    for (final entry in kVitalChoiceKeys.entries) {
+      if (chosen.contains(entry.key)) continue;
+      // The BMI service shares height/weight, so don't wipe them from there.
+      final keepVitals = entry.key == 'Weight / Height' && has('bpi');
+      if (!keepVitals) {
+        for (final f in kVitalChoiceFields[entry.key] ?? const <VitalField>[]) {
+          setVitalRaw(f, null);
+        }
+      }
+      for (final k in entry.value) {
+        d.data.remove(k);
+      }
+    }
+
+    final all = chosen.length == kVitalChoiceKeys.length;
+    d.set(kVitalsSelectedKey, [
+      if (all) kSelectAllLabel,
+      ...kVitalChoices.where(chosen.contains),
+    ]);
+    d.refreshStatus();
+    notifyListeners();
   }
 
   void setVital(VitalField field, Object? raw, {String? fromServiceId}) {

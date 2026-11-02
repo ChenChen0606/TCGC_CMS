@@ -1180,6 +1180,36 @@ const List<String> kVitalActions = [
 
 const List<String> kReferralActions = ['Referred to'];
 
+const String kVitalsSelectedKey = 'vitals_selected';
+const String kSelectAllLabel = 'Select All';
+
+const List<String> kVitalChoices = [
+  'Blood Pressure',
+  'Temperature',
+  'Pulse',
+  'Respiratory Rate',
+  'Weight / Height',
+  'O₂ Saturation',
+];
+
+const Map<String, List<String>> kVitalChoiceKeys = {
+  'Blood Pressure': ['systolic', 'diastolic', 'position', 'arm_used', 'bp_assessment'],
+  'Temperature': ['temp_c', 'method', 'temp_assessment'],
+  'Pulse': ['pulse_bpm', 'pulse_assessment'],
+  'Respiratory Rate': ['resp_rate', 'resp_assessment'],
+  'Weight / Height': ['height_cm', 'weight_kg', 'bmi', 'bmi_class'],
+  'O₂ Saturation': ['o2_sat', 'spo2_assessment'],
+};
+
+const Map<String, List<VitalField>> kVitalChoiceFields = {
+  'Blood Pressure': [VitalField.systolic, VitalField.diastolic],
+  'Temperature': [VitalField.temperature],
+  'Pulse': [VitalField.heartRate],
+  'Respiratory Rate': [VitalField.respRate],
+  'Weight / Height': [VitalField.heightCm, VitalField.weightKg],
+  'O₂ Saturation': [VitalField.o2Sat],
+};
+
 const List<({String key, String label})> kPhysicalExamRows = [
   (key: 'general_appearance', label: 'General Appearance'),
   (key: 'orientation', label: 'Orientation'),
@@ -2903,36 +2933,31 @@ class VisitServiceForms {
       serviceId: 'vital_signs',
       crossValidate: _vitalSignsCrossRules,
       slides: [
-        ServiceSlide(
+                ServiceSlide(
           title: 'Readings',
           groups: [
-            FieldGroup(
-              [
-                'systolic',
-                'diastolic',
-                'position',
-                'arm_used',
-                'bp_assessment'
-              ],
-              title: 'Blood Pressure',
-            ),
-            FieldGroup(
-              ['temp_c', 'method', 'temp_assessment'],
-              title: 'Temperature',
-            ),
-            FieldGroup(
-              [
-                'pulse_bpm',
-                'pulse_assessment',
-                'resp_rate',
-                'resp_assessment',
-                'o2_sat',
-                'spo2_assessment',
-              ],
-              title: 'Other Readings',
-            ),
+            FieldGroup(kVitalChoiceKeys['Blood Pressure']!,
+                title: 'Blood Pressure'),
+            FieldGroup(kVitalChoiceKeys['Temperature']!, title: 'Temperature'),
+            FieldGroup(kVitalChoiceKeys['Pulse']!, title: 'Pulse'),
+            FieldGroup(kVitalChoiceKeys['Respiratory Rate']!,
+                title: 'Respiratory Rate'),
+            FieldGroup(kVitalChoiceKeys['Weight / Height']!,
+                title: 'Weight / Height'),
+            FieldGroup(kVitalChoiceKeys['O₂ Saturation']!,
+                title: 'Oxygen Saturation'),
           ],
           fields: [
+            ServiceField(
+              key: kVitalsSelectedKey,
+              label: 'Vital signs to take',
+              kind: ServiceFieldKind.checkboxes,
+              options: const [kSelectAllLabel, ...kVitalChoices],
+              required: true,
+              note: 'Tick what you are taking. Only ticked items are asked '
+                  'for and saved; the rest are saved empty.',
+            ),
+            // ---- Blood pressure ----
             ServiceField(
               key: 'systolic',
               label: 'Systolic',
@@ -2941,6 +2966,8 @@ class VisitServiceForms {
               vital: VitalField.systolic,
               required: true,
               width: FieldWidth.half,
+              shownWhenKey: kVitalsSelectedKey,
+              shownWhenValues: const ['Blood Pressure'],
               validate: _vitalWhole(
                   VitalClassifier.systolicMin, VitalClassifier.systolicMax),
             ),
@@ -2952,6 +2979,8 @@ class VisitServiceForms {
               vital: VitalField.diastolic,
               required: true,
               width: FieldWidth.half,
+              shownWhenKey: kVitalsSelectedKey,
+              shownWhenValues: const ['Blood Pressure'],
               validate: _vitalWhole(
                   VitalClassifier.diastolicMin, VitalClassifier.diastolicMax),
             ),
@@ -2962,6 +2991,8 @@ class VisitServiceForms {
               options: kBpPositions,
               required: true,
               width: FieldWidth.half,
+              shownWhenKey: kVitalsSelectedKey,
+              shownWhenValues: const ['Blood Pressure'],
             ),
             ServiceField(
               key: 'arm_used',
@@ -2970,14 +3001,19 @@ class VisitServiceForms {
               options: kBpArms,
               required: true,
               width: FieldWidth.half,
+              shownWhenKey: kVitalsSelectedKey,
+              shownWhenValues: const ['Blood Pressure'],
             ),
             ServiceField(
               key: 'bp_assessment',
               label: 'Blood Pressure Classification',
               kind: ServiceFieldKind.readOnly,
               width: FieldWidth.half,
+              shownWhenKey: kVitalsSelectedKey,
+              shownWhenValues: const ['Blood Pressure'],
               note: 'Single reading is a screening result, not a diagnosis.',
             ),
+            // ---- Temperature ----
             ServiceField(
               key: 'temp_c',
               label: 'Temperature',
@@ -2987,6 +3023,8 @@ class VisitServiceForms {
               required: true,
               width: FieldWidth.half,
               hint: '36.8',
+              shownWhenKey: kVitalsSelectedKey,
+              shownWhenValues: const ['Temperature'],
               validate: _vitalDecimal(VitalClassifier.temperatureMin,
                   VitalClassifier.temperatureMax),
             ),
@@ -2997,6 +3035,8 @@ class VisitServiceForms {
               options: kTemperatureMethods,
               required: true,
               width: FieldWidth.half,
+              shownWhenKey: kVitalsSelectedKey,
+              shownWhenValues: const ['Temperature'],
               note: 'Readings vary by method; axillary reads ~0.3–0.5 °C '
                   'lower than oral.',
             ),
@@ -3005,8 +3045,11 @@ class VisitServiceForms {
               label: 'Temperature Classification',
               kind: ServiceFieldKind.readOnly,
               width: FieldWidth.half,
+              shownWhenKey: kVitalsSelectedKey,
+              shownWhenValues: const ['Temperature'],
               note: 'Worked out from the temperature entered above.',
             ),
+            // ---- Pulse ----
             ServiceField(
               key: 'pulse_bpm',
               label: 'Pulse Rate (beats per minute)',
@@ -3015,6 +3058,8 @@ class VisitServiceForms {
               vital: VitalField.heartRate,
               required: true,
               width: FieldWidth.half,
+              shownWhenKey: kVitalsSelectedKey,
+              shownWhenValues: const ['Pulse'],
               note: 'Whole beats per minute, '
                   '${VitalClassifier.pulseMin}–${VitalClassifier.pulseMax}. '
                   'The classification fills in from the number.',
@@ -3026,16 +3071,21 @@ class VisitServiceForms {
               label: 'Pulse Classification',
               kind: ServiceFieldKind.readOnly,
               width: FieldWidth.half,
+              shownWhenKey: kVitalsSelectedKey,
+              shownWhenValues: const ['Pulse'],
               note: 'Worked out from the pulse rate entered above.',
             ),
+            // ---- Respiratory rate ----
             ServiceField(
               key: 'resp_rate',
               label: 'Respiratory Rate',
               kind: ServiceFieldKind.number,
               unit: '/min',
               vital: VitalField.respRate,
+              required: true,
               width: FieldWidth.half,
-              hint: 'Optional',
+              shownWhenKey: kVitalsSelectedKey,
+              shownWhenValues: const ['Respiratory Rate'],
               validate:
                   _vitalWhole(VitalClassifier.respMin, VitalClassifier.respMax),
             ),
@@ -3044,16 +3094,63 @@ class VisitServiceForms {
               label: 'Respiratory Classification',
               kind: ServiceFieldKind.readOnly,
               width: FieldWidth.half,
+              shownWhenKey: kVitalsSelectedKey,
+              shownWhenValues: const ['Respiratory Rate'],
               note: 'Worked out from the respiratory rate entered above.',
             ),
+            // ---- Weight / height ----
+            ServiceField(
+              key: 'height_cm',
+              label: 'Height',
+              kind: ServiceFieldKind.number,
+              unit: 'cm',
+              vital: VitalField.heightCm,
+              required: true,
+              width: FieldWidth.half,
+              shownWhenKey: kVitalsSelectedKey,
+              shownWhenValues: const ['Weight / Height'],
+              validate: _vitalDecimal(30, 250),
+            ),
+            ServiceField(
+              key: 'weight_kg',
+              label: 'Weight',
+              kind: ServiceFieldKind.number,
+              unit: 'kg',
+              vital: VitalField.weightKg,
+              required: true,
+              width: FieldWidth.half,
+              shownWhenKey: kVitalsSelectedKey,
+              shownWhenValues: const ['Weight / Height'],
+              validate: _vitalDecimal(2, 400),
+            ),
+            ServiceField(
+              key: 'bmi',
+              label: 'BMI',
+              kind: ServiceFieldKind.readOnly,
+              width: FieldWidth.half,
+              shownWhenKey: kVitalsSelectedKey,
+              shownWhenValues: const ['Weight / Height'],
+              note: 'Worked out from the height and weight above.',
+            ),
+            ServiceField(
+              key: 'bmi_class',
+              label: 'BMI Classification',
+              kind: ServiceFieldKind.readOnly,
+              width: FieldWidth.half,
+              shownWhenKey: kVitalsSelectedKey,
+              shownWhenValues: const ['Weight / Height'],
+            ),
+            // ---- Oxygen saturation ----
             ServiceField(
               key: 'o2_sat',
               label: 'Oxygen Saturation (SpO2)',
               kind: ServiceFieldKind.number,
               unit: '%',
               vital: VitalField.o2Sat,
+              required: true,
               width: FieldWidth.half,
-              hint: 'Optional',
+              shownWhenKey: kVitalsSelectedKey,
+              shownWhenValues: const ['O₂ Saturation'],
               validate:
                   _vitalWhole(VitalClassifier.spo2Min, VitalClassifier.spo2Max),
             ),
@@ -3062,6 +3159,8 @@ class VisitServiceForms {
               label: 'Oxygen Saturation Classification',
               kind: ServiceFieldKind.readOnly,
               width: FieldWidth.half,
+              shownWhenKey: kVitalsSelectedKey,
+              shownWhenValues: const ['O₂ Saturation'],
               note: 'Worked out from the oxygen saturation entered above.',
             ),
           ],

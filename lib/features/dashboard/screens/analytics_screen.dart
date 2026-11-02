@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:clinicmanagementsystem/core/config/supabase_config.dart';
 import 'package:clinicmanagementsystem/core/services/data_tracker.dart';
 import 'package:clinicmanagementsystem/features/inventory/services/medicine_service.dart';
-import 'package:clinicmanagementsystem/features/visits/services/visit_service.dart';
 import 'package:clinicmanagementsystem/core/theme/app_colors.dart';
 
 const kTeal = AppColors.primary;
@@ -9,6 +9,72 @@ const kBg = AppColors.bg;
 const kBorder = AppColors.border;
 const kTextMuted = AppColors.textSub;
 const kTextDark = AppColors.textDark;
+
+/// One clinic visit, with everything the Reports page needs
+/// (including the school year / semester and the full list of services).
+class _ReportVisit {
+  final String visitId;
+  final String personId;
+  final String name;
+  final String personType;
+  final DateTime? visitDate;
+  final String visitTime;
+  final String reason;
+  final String instituteCode;
+  final String programCode;
+  final List<String> services;
+
+  /// Every (school year, semester) the patient has an academic record in.
+  final List<({String year, String semester})> periods;
+
+  const _ReportVisit({
+    required this.visitId,
+    required this.personId,
+    this.name = '',
+    this.personType = '',
+    this.visitDate,
+    this.visitTime = '',
+    this.reason = '',
+    this.instituteCode = '',
+    this.programCode = '',
+    this.services = const [],
+    this.periods = const [],
+  });
+
+  String get displayName {
+    if (name.trim().isNotEmpty) return name.trim();
+    if (personId.trim().isNotEmpty) return personId.trim();
+    return 'Unnamed visitor';
+  }
+
+  String get affiliation {
+    final i = instituteCode.trim();
+    final p = programCode.trim();
+    if (i.isEmpty && p.isEmpty) return '';
+    if (i.isEmpty) return p;
+    if (p.isEmpty) return i;
+    return '$i - $p';
+  }
+}
+
+Map<String, dynamic> _asMap(Object? value) {
+  if (value is Map) return Map<String, dynamic>.from(value);
+  if (value is List && value.isNotEmpty && value.first is Map) {
+    return Map<String, dynamic>.from(value.first as Map);
+  }
+  return const {};
+}
+
+List<Map<String, dynamic>> _asList(Object? value) {
+  if (value is List) {
+    return [
+      for (final e in value)
+        if (e is Map) Map<String, dynamic>.from(e),
+    ];
+  }
+  if (value is Map) return [Map<String, dynamic>.from(value)];
+  return const [];
+}
 
 class ReportsScreen extends StatefulWidget {
   const ReportsScreen({super.key});
@@ -18,12 +84,27 @@ class ReportsScreen extends StatefulWidget {
 }
 
 class _ReportsScreenState extends State<ReportsScreen> {
+  static const List<String> _views = [
+    'Daily',
+    'Weekly',
+    'Monthly',
+    'School Year',
+    'Custom',
+  ];
+
   String _selectedView = 'Daily';
   DateTimeRange? _insightsCustomRange;
 
+  String _selectedAcadYear = 'All';
+  String _selectedSemester = 'All';
+  String _selectedService = 'All';
+  bool _showAllServices = false;
+  final Set<String> _expandedTypes = {};
+
   List<Medicine> _medicines = [];
 
-  List<DashboardVisit> _visits = [];
+  List<_ReportVisit> _visits = [];
+  List<({String year, String semester})> _periodOptions = [];
   bool _loadingVisits = true;
   String? _visitsError;
 
@@ -60,11 +141,108 @@ class _ReportsScreenState extends State<ReportsScreen> {
       _visitsError = null;
     });
     try {
-      final visits = await VisitService.fetchDashboardVisits();
+      // School years / semesters that exist in the database.
+      final periods = <({String year, String semester})>[];
+      try {
+        final rows = await supabaseClient
+            .from('academic_periods')
+            .select('acad_year, semester');
+        for (final r in _asList(rows)) {
+          final y = '${r['acad_year'] ?? ''}'.trim();
+          final s = '${r['semester'] ?? ''}'.trim();
+          if (y.isNotEmpty) periods.add((year: y, semester: s));
+        }
+      } catch (_) {}
+
+      // Page through clinic_visits so we are not capped at 1000 rows.
+      final all = <Map<String, dynamic>>[];
+      const page = 1000;
+      var from = 0;
+      while (true) {
+        final rows = await supabaseClient.from('clinic_visits').select('''
+          visit_id, person_id, visit_date, visit_time, reason_for_visit, created_at,
+          individual_records!left(
+            fn, mn, ln, person_type,
+            individual_academic_records!left(
+              status,
+              institutes!left(code),
+              program!left(code),
+              academic_periods!left(acad_year, semester)
+            )
+          ),
+          clinic_visit_services!left(
+            service_types!left(service_name, service_code)
+          )
+        ''').order('created_at', ascending: false).range(from, from + page - 1);
+        final list = _asList(rows);
+        all.addAll(list);
+        if (list.length < page) break;
+        from += page;
+      }
+
+      final visits = all.map<_ReportVisit>((row) {
+        final person = _asMap(row['individual_records']);
+
+        final acadList = _asList(person['individual_academic_records']);
+        Map<String, dynamic> acad = const {};
+        for (final a in acadList) {
+          if ('${a['status']}'.trim() == 'Active') {
+            acad = a;
+            break;
+          }
+        }
+        if (acad.isEmpty && acadList.isNotEmpty) acad = acadList.first;
+        final institute = _asMap(acad['institutes']);
+        final program = _asMap(acad['program']);
+
+        final vPeriods = <({String year, String semester})>[];
+        for (final a in acadList) {
+          final p = _asMap(a['academic_periods']);
+          final y = '${p['acad_year'] ?? ''}'.trim();
+          final s = '${p['semester'] ?? ''}'.trim();
+          if (y.isEmpty) continue;
+          if (!vPeriods.any((e) => e.year == y && e.semester == s)) {
+            vPeriods.add((year: y, semester: s));
+          }
+        }
+
+        final services = <String>[];
+        for (final s in _asList(row['clinic_visit_services'])) {
+          final st = _asMap(s['service_types']);
+          final n = '${st['service_name'] ?? st['service_code'] ?? ''}'.trim();
+          if (n.isNotEmpty && !services.contains(n)) services.add(n);
+        }
+
+        final name = [
+          '${person['fn'] ?? ''}'.trim(),
+          '${person['mn'] ?? ''}'.trim(),
+          '${person['ln'] ?? ''}'.trim(),
+        ].where((e) => e.isNotEmpty).join(' ');
+
+        return _ReportVisit(
+          visitId: '${row['visit_id'] ?? ''}',
+          personId: '${row['person_id'] ?? ''}',
+          name: name,
+          personType: '${person['person_type'] ?? ''}'.trim(),
+          visitDate: DateTime.tryParse('${row['visit_date'] ?? ''}'),
+          visitTime: '${row['visit_time'] ?? ''}'.trim(),
+          reason: '${row['reason_for_visit'] ?? ''}'.trim(),
+          instituteCode: '${institute['code'] ?? ''}'.trim(),
+          programCode: '${program['code'] ?? ''}'.trim(),
+          services: services,
+          periods: vPeriods,
+        );
+      }).toList();
+
       if (!mounted) return;
       setState(() {
         _visits = visits;
+        _periodOptions = periods;
         _loadingVisits = false;
+        if (_selectedService != 'All' &&
+            !_availableServices.contains(_selectedService)) {
+          _selectedService = 'All';
+        }
       });
     } catch (e) {
       if (!mounted) return;
@@ -96,6 +274,61 @@ class _ReportsScreenState extends State<ReportsScreen> {
     return '${months[d.month - 1]} ${d.day}, ${d.year}';
   }
 
+  // ── School year / semester / service options ──────────────────────────
+
+  static int _semRank(String s) {
+    final t = s.toLowerCase();
+    if (t.contains('summer')) return 3;
+    if (t.contains('1') || t.contains('first')) return 1;
+    if (t.contains('2') || t.contains('second')) return 2;
+    return 9;
+  }
+
+  List<String> get _availableAcadYears {
+    final years = <String>{};
+    for (final p in _periodOptions) {
+      if (p.year.isNotEmpty) years.add(p.year);
+    }
+    for (final v in _visits) {
+      for (final p in v.periods) {
+        years.add(p.year);
+      }
+    }
+    return years.toList()..sort((a, b) => b.compareTo(a));
+  }
+
+  List<String> get _availableSemesters {
+    final sems = <String>{};
+    for (final p in _periodOptions) {
+      if (p.year == _selectedAcadYear && p.semester.isNotEmpty) {
+        sems.add(p.semester);
+      }
+    }
+    for (final v in _visits) {
+      for (final p in v.periods) {
+        if (p.year == _selectedAcadYear && p.semester.isNotEmpty) {
+          sems.add(p.semester);
+        }
+      }
+    }
+    final list = sems.toList();
+    list.sort((a, b) {
+      final c = _semRank(a).compareTo(_semRank(b));
+      return c != 0 ? c : a.compareTo(b);
+    });
+    return list;
+  }
+
+  List<String> get _availableServices {
+    final s = <String>{};
+    for (final v in _visits) {
+      s.addAll(v.services);
+    }
+    return s.toList()..sort();
+  }
+
+  // ── Date range / filtering ────────────────────────────────────────────
+
   DateTimeRange? _rangeFor(String view) {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
@@ -126,24 +359,57 @@ class _ReportsScreenState extends State<ReportsScreen> {
     }
   }
 
-  String get _selectedViewLabel {
-    if (_selectedView == 'Custom') {
-      if (_insightsCustomRange != null) {
-        return '${_fmtDate(_insightsCustomRange!.start)} – ${_fmtDate(_insightsCustomRange!.end)}';
-      }
-      return 'Custom range — pick dates';
-    }
-    return _selectedView;
+  String get _semesterLabel {
+    if (_selectedSemester == 'All') return '';
+    final t = _selectedSemester.toLowerCase();
+    return (t.contains('sem') || t.contains('summer'))
+        ? _selectedSemester
+        : '$_selectedSemester Semester';
   }
 
-  List<DashboardVisit> _visitsInRange() {
-    final range = _rangeFor(_selectedView);
-    if (range == null) return const [];
-    return _visits.where((v) {
-      final d = v.visitDate;
-      return d != null && !d.isBefore(range.start) && !d.isAfter(range.end);
-    }).toList();
+  String get _selectedViewLabel {
+    String base;
+    switch (_selectedView) {
+      case 'Custom':
+        base = _insightsCustomRange != null
+            ? '${_fmtDate(_insightsCustomRange!.start)} - ${_fmtDate(_insightsCustomRange!.end)}'
+            : 'Custom range - pick dates';
+        break;
+      case 'School Year':
+        if (_selectedAcadYear == 'All') {
+          base = 'all school years';
+        } else {
+          base = 'A.Y. $_selectedAcadYear';
+          if (_selectedSemester != 'All') base += ' - $_semesterLabel';
+        }
+        break;
+      default:
+        base = _selectedView;
+    }
+    if (_selectedService != 'All') base += ' · $_selectedService';
+    return base;
   }
+
+  bool _inPeriod(_ReportVisit v) {
+    if (_selectedView == 'School Year') {
+      if (_selectedAcadYear == 'All') return true;
+      return v.periods.any((p) =>
+          p.year == _selectedAcadYear &&
+          (_selectedSemester == 'All' || p.semester == _selectedSemester));
+    }
+    final range = _rangeFor(_selectedView);
+    if (range == null) return false;
+    final d = v.visitDate;
+    if (d == null) return false;
+    final day = DateTime(d.year, d.month, d.day);
+    return !day.isBefore(range.start) && !day.isAfter(range.end);
+  }
+
+  bool _hasService(_ReportVisit v) =>
+      _selectedService == 'All' || v.services.contains(_selectedService);
+
+  List<_ReportVisit> _visitsInRange() =>
+      _visits.where((v) => _inPeriod(v) && _hasService(v)).toList();
 
   Map<String, double> get _currentViewData {
     final list = _visitsInRange();
@@ -172,7 +438,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
     return sorted.take(limit).toList();
   }
 
-  List<MapEntry<String, int>> _topServices({int limit = 5}) {
+  List<MapEntry<String, int>> _topServices({int? limit = 5}) {
     final counts = <String, int>{};
     for (final v in _visitsInRange()) {
       for (final s in v.services) {
@@ -183,7 +449,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
     }
     final sorted = counts.entries.toList()
       ..sort((a, b) => b.value.compareTo(a.value));
-    return sorted.take(limit).toList();
+    return limit == null ? sorted : sorted.take(limit).toList();
   }
 
   List<MapEntry<String, int>> _topInstitutes({int limit = 5}) {
@@ -230,12 +496,16 @@ class _ReportsScreenState extends State<ReportsScreen> {
     return DateTimeRange(start: prevStart, end: prevEnd);
   }
 
-  int get _previousTotalVisits {
+  /// Visits in the previous period; null when a comparison makes no sense
+  /// (school year view or an unpicked custom range).
+  int? get _previousTotalVisits {
     final range = _previousRangeFor(_selectedView);
-    if (range == null) return 0;
+    if (range == null) return null;
     return _visits.where((v) {
       final d = v.visitDate;
-      return d != null && !d.isBefore(range.start) && !d.isAfter(range.end);
+      if (d == null || !_hasService(v)) return false;
+      final day = DateTime(d.year, d.month, d.day);
+      return !day.isBefore(range.start) && !day.isAfter(range.end);
     }).length;
   }
 
@@ -369,6 +639,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
   Widget _buildVisitationSummaryCard() {
     final data = _currentViewData;
+    final prev = _previousTotalVisits;
 
     final metrics = <Map<String, dynamic>>[
       {
@@ -376,7 +647,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
         'value': (data['Total'] ?? 0).toInt(),
         'color': kTeal,
         'icon': Icons.groups_rounded,
-        'delta': (data['Total'] ?? 0).toInt() - _previousTotalVisits,
+        if (prev != null) 'delta': (data['Total'] ?? 0).toInt() - prev,
       },
       {
         'label': 'Students',
@@ -419,7 +690,6 @@ class _ReportsScreenState extends State<ReportsScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               LayoutBuilder(builder: (context, constraints) {
-                final isNarrow = constraints.maxWidth < 640;
                 final title = Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -432,37 +702,44 @@ class _ReportsScreenState extends State<ReportsScreen> {
                           size: 18, color: kTeal),
                     ),
                     const SizedBox(width: 12),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text('VISITATION SUMMARY',
-                            style: TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w800,
-                                color: kTeal,
-                                letterSpacing: 1.1)),
-                        Text('Real-time data for $_selectedViewLabel',
-                            style: const TextStyle(
-                                fontSize: 12, color: kTextMuted)),
-                      ],
+                    Flexible(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('VISITATION SUMMARY',
+                              style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w800,
+                                  color: kTeal,
+                                  letterSpacing: 1.1)),
+                          Text('Real-time data for $_selectedViewLabel',
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                  fontSize: 12, color: kTextMuted)),
+                        ],
+                      ),
                     ),
                   ],
                 );
-                final selector = _buildViewSelector();
-                if (isNarrow) {
+                if (constraints.maxWidth < 1000) {
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       title,
                       const SizedBox(height: 12),
-                      selector,
+                      _buildFilterBar(alignEnd: false),
                     ],
                   );
                 }
+                // Wide: filters sit on the right, level with the title.
                 return Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [title, selector],
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(flex: 2, child: title),
+                    const SizedBox(width: 16),
+                    Expanded(flex: 5, child: _buildFilterBar(alignEnd: true)),
+                  ],
                 );
               }),
               const SizedBox(height: 22),
@@ -480,6 +757,104 @@ class _ReportsScreenState extends State<ReportsScreen> {
         const SizedBox(height: 16),
         _outOfStockBanner(),
       ],
+    );
+  }
+
+  // ── Filters: view selector + school year/semester + service ───────────
+
+  Widget _buildFilterBar({required bool alignEnd}) {
+    return Wrap(
+      spacing: 10,
+      runSpacing: 10,
+      alignment: alignEnd ? WrapAlignment.end : WrapAlignment.start,
+      runAlignment: alignEnd ? WrapAlignment.end : WrapAlignment.start,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        _buildViewSelector(),
+        if (_selectedView == 'School Year') ...[
+          _filterDropdown(
+            icon: Icons.event_note_rounded,
+            value: _selectedAcadYear,
+            options: ['All', ..._availableAcadYears],
+            allLabel: 'All Years',
+            onChanged: (v) => setState(() {
+              _selectedAcadYear = v;
+              _selectedSemester = 'All';
+            }),
+          ),
+          // Semester only shows once a specific school year is picked.
+          if (_selectedAcadYear != 'All')
+            _filterDropdown(
+              icon: Icons.calendar_view_month_rounded,
+              value: _selectedSemester,
+              options: ['All', ..._availableSemesters],
+              allLabel: 'All Semesters',
+              onChanged: (v) => setState(() => _selectedSemester = v),
+            ),
+        ],
+        _filterDropdown(
+          icon: Icons.medical_services_outlined,
+          value: _selectedService,
+          options: ['All', ..._availableServices],
+          allLabel: 'All Services',
+          onChanged: (v) => setState(() => _selectedService = v),
+        ),
+      ],
+    );
+  }
+
+  Widget _filterDropdown({
+    required IconData icon,
+    required String value,
+    required List<String> options,
+    required String allLabel,
+    required ValueChanged<String> onChanged,
+  }) {
+    final safe = options.contains(value) ? value : 'All';
+    final active = safe != 'All';
+    return Container(
+      height: 42,
+      padding: const EdgeInsets.only(left: 12, right: 8),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: active ? kTeal : kBorder),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 16, color: active ? kTeal : kTextMuted),
+          const SizedBox(width: 8),
+          DropdownButtonHideUnderline(
+            child: DropdownButton<String>(
+              value: safe,
+              isDense: true,
+              borderRadius: BorderRadius.circular(12),
+              icon: const Icon(Icons.keyboard_arrow_down_rounded,
+                  size: 18, color: kTextMuted),
+              style: const TextStyle(
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w600,
+                  color: kTextDark),
+              items: [
+                for (final o in options)
+                  DropdownMenuItem(
+                    value: o,
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 220),
+                      child: Text(o == 'All' ? allLabel : o,
+                          overflow: TextOverflow.ellipsis),
+                    ),
+                  ),
+              ],
+              onChanged: (v) {
+                if (v == null) return;
+                onChanged(v);
+              },
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -588,7 +963,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
           Expanded(
             child: Text(
               hasIssue
-                  ? '$count medicine${count > 1 ? 's' : ''} out of stock — please review inventory'
+                  ? '$count medicine${count > 1 ? 's' : ''} out of stock - please review inventory'
                   : 'All medicines are sufficiently stocked',
               style: TextStyle(
                   fontSize: 13.5,
@@ -610,7 +985,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
           border: Border.all(color: kBorder)),
       child: Row(
         mainAxisSize: MainAxisSize.min,
-        children: ['Daily', 'Weekly', 'Monthly', 'Custom'].map((view) {
+        children: _views.map((view) {
           final isSelected = _selectedView == view;
           return GestureDetector(
             onTap: () {
@@ -621,7 +996,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
               }
             },
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
               decoration: BoxDecoration(
                 color: isSelected ? kTeal : Colors.white,
                 borderRadius: BorderRadius.circular(9),
@@ -639,6 +1014,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
     );
   }
 
+  // ── Patient breakdown (with full record lists) ────────────────────────
+
   Widget _buildDemographicCard() {
     final currentData = _currentViewData;
     final total = currentData['Total'] ?? 0;
@@ -646,10 +1023,12 @@ class _ReportsScreenState extends State<ReportsScreen> {
     return _sectionCard(
       icon: Icons.donut_large_rounded,
       title: 'Patient Breakdown',
-      subtitle: 'Share of consultations by patient type for this period',
+      subtitle:
+          'Tap a group to see every record for this period and filter',
       child: Column(
         children: [
           _breakdownTile(
+              'Student',
               'Students',
               currentData['Students']!.toInt(),
               total,
@@ -658,12 +1037,14 @@ class _ReportsScreenState extends State<ReportsScreen> {
               Icons.school_outlined),
           _breakdownTile(
               'Faculty',
+              'Faculty',
               currentData['Faculty']!.toInt(),
               total,
               _mostCommonReasonFor('Faculty'),
               AppColors.faculty,
               Icons.co_present_outlined),
           _breakdownTile(
+              'Staff',
               'Staff',
               currentData['Staff']!.toInt(),
               total,
@@ -675,17 +1056,261 @@ class _ReportsScreenState extends State<ReportsScreen> {
     );
   }
 
-  Widget _breakdownTile(String title, int count, double total,
-      String mostCommon, Color color, IconData icon) {
+  List<_ReportVisit> _recordsFor(String personType) {
+    final list =
+        _visitsInRange().where((v) => v.personType == personType).toList();
+    list.sort((a, b) {
+      final da = a.visitDate;
+      final db = b.visitDate;
+      if (da == null && db == null) return 0;
+      if (da == null) return 1;
+      if (db == null) return -1;
+      final c = db.compareTo(da);
+      return c != 0 ? c : b.visitTime.compareTo(a.visitTime);
+    });
+    return list;
+  }
+
+  Widget _breakdownTile(String personType, String title, int count,
+      double total, String mostCommon, Color color, IconData icon) {
     final double pct = total <= 0 ? 0 : (count / total).clamp(0, 1);
     final String subtitle = mostCommon.isEmpty
         ? 'No visits logged for this group'
         : 'Most common: $mostCommon';
+    final expanded = _expandedTypes.contains(personType);
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: expanded ? color : kBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          InkWell(
+            borderRadius: BorderRadius.circular(14),
+            onTap: () => setState(() {
+              if (expanded) {
+                _expandedTypes.remove(personType);
+              } else {
+                _expandedTypes.add(personType);
+              }
+            }),
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(9),
+                        decoration: BoxDecoration(
+                            color: color.withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(11)),
+                        child: Icon(icon, color: color, size: 18),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(title,
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 15,
+                                    color: kTextDark)),
+                            const SizedBox(height: 2),
+                            Text(subtitle,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                    fontSize: 12,
+                                    color: AppColors.textMuted)),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Text('$count',
+                              style: TextStyle(
+                                  fontWeight: FontWeight.w900,
+                                  color: color,
+                                  fontSize: 20)),
+                          const Text('cases',
+                              style:
+                                  TextStyle(fontSize: 11, color: kTextMuted)),
+                        ],
+                      ),
+                      const SizedBox(width: 6),
+                      Icon(
+                          expanded
+                              ? Icons.keyboard_arrow_up_rounded
+                              : Icons.keyboard_arrow_down_rounded,
+                          color: kTextMuted),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(10),
+                    child: LinearProgressIndicator(
+                      value: pct.toDouble(),
+                      minHeight: 7,
+                      backgroundColor: kBorder,
+                      valueColor: AlwaysStoppedAnimation<Color>(color),
+                    ),
+                  ),
+                  const SizedBox(height: 5),
+                  Text(
+                      '${(pct * 100).toStringAsFixed(1)}% of total visits this period',
+                      style: const TextStyle(
+                          fontSize: 11,
+                          color: kTextMuted,
+                          fontWeight: FontWeight.w600)),
+                ],
+              ),
+            ),
+          ),
+          if (expanded) _recordsPanel(personType, color),
+        ],
+      ),
+    );
+  }
+
+  Widget _recordsPanel(String personType, Color color) {
+    final records = _recordsFor(personType);
+
+    // How many times each service was done for this group.
+    final serviceCounts = <String, int>{};
+    for (final v in records) {
+      for (final s in v.services) {
+        serviceCounts[s] = (serviceCounts[s] ?? 0) + 1;
+      }
+    }
+    final svc = serviceCounts.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+
+    // One entry per patient; `records` is already newest-first, so patients
+    // are ordered by their latest visit.
+    final byPerson = <String, List<_ReportVisit>>{};
+    for (final v in records) {
+      final key = v.personId.isNotEmpty ? v.personId : v.displayName;
+      byPerson.putIfAbsent(key, () => <_ReportVisit>[]).add(v);
+    }
+    final people = byPerson.values.toList();
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Divider(height: 1, color: kBorder),
+          const SizedBox(height: 12),
+          Text('SERVICES DONE (${records.length} RECORD${records.length == 1 ? '' : 'S'})',
+              style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                  color: color,
+                  letterSpacing: 0.6)),
+          const SizedBox(height: 8),
+          if (svc.isEmpty)
+            const Text('No services recorded.',
+                style: TextStyle(fontSize: 12.5, color: kTextMuted))
+          else
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                for (final e in svc) _countChip(e.key, e.value, color),
+              ],
+            ),
+          const SizedBox(height: 14),
+          Text('ALL RECORDS BY PATIENT',
+              style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                  color: color,
+                  letterSpacing: 0.6)),
+          const SizedBox(height: 8),
+          if (records.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 8),
+              child: Text('No records for the current filter.',
+                  style: TextStyle(fontSize: 12.5, color: kTextMuted)),
+            )
+          else
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 560),
+              child: ListView.separated(
+                primary: false,
+                shrinkWrap: true,
+                itemCount: people.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 12),
+                itemBuilder: (_, i) => _personCard(people[i], color),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _countChip(String label, int n, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Text('$label  $n',
+          style: TextStyle(
+              fontSize: 11.5, fontWeight: FontWeight.w700, color: color)),
+    );
+  }
+
+  String _fmtLongDate(DateTime d) {
+    const days = [
+      'Monday',
+      'Tuesday',
+      'Wednesday',
+      'Thursday',
+      'Friday',
+      'Saturday',
+      'Sunday'
+    ];
+    return '${days[d.weekday - 1]}, ${_fmtDate(d)}';
+  }
+
+  /// One container per patient: every record that matches the current
+  /// filters, grouped under a highlighted date heading (any year / month).
+  Widget _personCard(List<_ReportVisit> visits, Color color) {
+    final first = visits.first;
+
+    // Group this patient's visits by day (visits are newest-first).
+    final days = <String, List<_ReportVisit>>{};
+    final dayOrder = <String>[];
+    for (final v in visits) {
+      final d = v.visitDate;
+      final key = d == null ? 'none' : '${d.year}-${d.month}-${d.day}';
+      if (!days.containsKey(key)) dayOrder.add(key);
+      days.putIfAbsent(key, () => <_ReportVisit>[]).add(v);
+    }
+
+    final initial =
+        first.displayName.isNotEmpty ? first.displayName[0].toUpperCase() : '?';
+    final meta = [
+      if (first.personId.isNotEmpty) 'ID: ${first.personId}',
+      if (first.personType.isNotEmpty) first.personType,
+    ].join('  ·  ');
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: kBorder),
       ),
@@ -695,74 +1320,188 @@ class _ReportsScreenState extends State<ReportsScreen> {
           Row(
             children: [
               Container(
-                padding: const EdgeInsets.all(9),
+                width: 42,
+                height: 42,
+                alignment: Alignment.center,
                 decoration: BoxDecoration(
-                    color: color.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(11)),
-                child: Icon(icon, color: color, size: 18),
+                  color: color.withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(initial,
+                    style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w800,
+                        color: color)),
               ),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(title,
+                    Text(first.displayName,
                         style: const TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 15,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w800,
                             color: kTextDark)),
-                    const SizedBox(height: 2),
-                    Text(subtitle,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                            fontSize: 12, color: AppColors.textMuted)),
+                    if (meta.isNotEmpty)
+                      Text(meta,
+                          style: const TextStyle(
+                              fontSize: 13, color: kTextMuted)),
+                    if (first.affiliation.isNotEmpty)
+                      Text(first.affiliation,
+                          style: const TextStyle(
+                              fontSize: 13,
+                              color: kTextMuted,
+                              fontWeight: FontWeight.w600)),
                   ],
                 ),
               ),
               const SizedBox(width: 10),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Text('$count',
-                      style: TextStyle(
-                          fontWeight: FontWeight.w900,
-                          color: color,
-                          fontSize: 20)),
-                  const Text('cases',
-                      style: TextStyle(fontSize: 11, color: kTextMuted)),
-                ],
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                    '${visits.length} record${visits.length == 1 ? '' : 's'}',
+                    style: TextStyle(
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w800,
+                        color: color)),
               ),
             ],
           ),
-          const SizedBox(height: 12),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(10),
-            child: LinearProgressIndicator(
-              value: pct.toDouble(),
-              minHeight: 7,
-              backgroundColor: kBorder,
-              valueColor: AlwaysStoppedAnimation<Color>(color),
-            ),
-          ),
-          const SizedBox(height: 5),
-          Text('${(pct * 100).toStringAsFixed(1)}% of total visits this period',
-              style: const TextStyle(
-                  fontSize: 11,
-                  color: kTextMuted,
-                  fontWeight: FontWeight.w600)),
+          for (final key in dayOrder) ...[
+            const SizedBox(height: 14),
+            _dateHeading(days[key]!.first.visitDate, days[key]!.length, color),
+            const SizedBox(height: 8),
+            for (final v in days[key]!) ...[
+              _visitDetail(v, color),
+              if (v != days[key]!.last) const SizedBox(height: 8),
+            ],
+          ],
         ],
       ),
     );
   }
 
+  Widget _dateHeading(DateTime? date, int count, Color color) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(10),
+        border: Border(left: BorderSide(color: color, width: 4)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.event_rounded, size: 17, color: color),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(date == null ? 'No date' : _fmtLongDate(date),
+                style: TextStyle(
+                    fontSize: 14.5,
+                    fontWeight: FontWeight.w800,
+                    color: color)),
+          ),
+          Text('$count visit${count == 1 ? '' : 's'}',
+              style: TextStyle(
+                  fontSize: 12, fontWeight: FontWeight.w700, color: color)),
+        ],
+      ),
+    );
+  }
+
+  Widget _visitDetail(_ReportVisit v, Color color) {
+    Widget label(String t) => Text(t.toUpperCase(),
+        style: const TextStyle(
+            fontSize: 10.5,
+            fontWeight: FontWeight.w800,
+            color: kTextMuted,
+            letterSpacing: 0.6));
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: kBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.schedule_rounded, size: 15, color: kTextMuted),
+              const SizedBox(width: 6),
+              Text(v.visitTime.isEmpty ? 'Time not recorded' : v.visitTime,
+                  style: const TextStyle(
+                      fontSize: 13.5,
+                      fontWeight: FontWeight.w700,
+                      color: kTextDark)),
+            ],
+          ),
+          const SizedBox(height: 10),
+          label('Reason for visit'),
+          const SizedBox(height: 3),
+          Text(v.reason.isEmpty ? 'Not recorded' : v.reason,
+              style: const TextStyle(fontSize: 14, color: kTextDark)),
+          const SizedBox(height: 10),
+          label('Services'),
+          const SizedBox(height: 5),
+          if (v.services.isEmpty)
+            const Text('No services recorded',
+                style: TextStyle(fontSize: 14, color: kTextMuted))
+          else
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                for (final s in v.services)
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: color.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(s,
+                        style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                            color: color)),
+                  ),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+
+  // ── Services & reasons ────────────────────────────────────────────────
+
   Widget _servicesReasonsCard() {
-    final services = _topServices();
+    final allServices = _topServices(limit: null);
+    final services =
+        _showAllServices ? allServices : allServices.take(5).toList();
     final reasons = _topReasons();
     return _sectionCard(
       icon: Icons.summarize_outlined,
       title: 'Services & Reasons for Visit',
       subtitle: 'What was done and what was logged this period',
+      trailing: allServices.length > 5
+          ? TextButton(
+              onPressed: () =>
+                  setState(() => _showAllServices = !_showAllServices),
+              child: Text(_showAllServices
+                  ? 'Show top 5'
+                  : 'Show all (${allServices.length})'),
+            )
+          : null,
       child: LayoutBuilder(builder: (context, constraints) {
         final narrow = constraints.maxWidth < 620;
         final left = _miniRanked(
@@ -941,7 +1680,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
     return _sectionCard(
       icon: Icons.repeat_rounded,
       title: 'Frequent Visitors',
-      subtitle: 'Patients with 2 or more visits on file',
+      subtitle: 'Patients with 2 or more visits in this period',
       child: _frequentVisitorsList(),
     );
   }
