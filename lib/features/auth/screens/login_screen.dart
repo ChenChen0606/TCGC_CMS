@@ -70,107 +70,100 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _login() async {
-    final username = _usernameCtrl.text.trim();
-    final password = _passwordCtrl.text;
+  final username = _usernameCtrl.text.trim();
+  final password = _passwordCtrl.text;
 
-    if (username.isEmpty || password.isEmpty) {
-      setState(() => _error = 'Enter your username and password to sign in.');
-      return;
-    }
+  if (username.isEmpty || password.isEmpty) {
+    setState(() => _error = 'Enter your username and password to sign in.');
+    return;
+  }
 
-    if (!isSupabaseConfigured) {
-      setState(() => _error =
-          'Unable to sign in. The app is not connected to the server yet.');
-      return;
-    }
+  if (!isSupabaseConfigured) {
+    setState(() => _error =
+        'Unable to sign in. The app is not connected to the server yet.');
+    return;
+  }
 
-    if (_submitting) return;
-    setState(() {
-      _submitting = true;
-      _error = null;
-    });
+  if (_submitting) return;
+  setState(() {
+    _submitting = true;
+    _error = null;
+  });
 
-    try {
-      final email =
-          await AccountService.resolveAuthEmailForIdentifier(username);
-      if (email == null || email.isEmpty) {
-        if (!mounted) return;
-        setState(() => _error = 'Incorrect username or password.');
-        return;
-      }
+  try {
+    final email =
+        await AccountService.resolveAuthEmailForIdentifier(username);
+    debugPrint('LOGIN: username="$username" -> email="$email"');
 
-      final response = await supabaseClient.auth.signInWithPassword(
-        email: email,
-        password: password,
-      );
-
-      final authUser = response.user;
-      if (authUser == null) {
-        if (!mounted) return;
-        setState(() => _error = 'Unable to sign in. Please try again.');
-        return;
-      }
-
-      Map<String, dynamic>? accountRow;
-      try {
-        accountRow = await supabaseClient
-            .from('useraccount')
-            .select()
-            .eq('user_id', authUser.id)
-            .maybeSingle();
-      } catch (_) {}
-
-      final isActive = accountRow != null && accountRow['is_active'] is bool
-          ? accountRow['is_active'] as bool
-          : _metaIsActive(authUser);
-
-      if (!isActive) {
-        await supabaseClient.auth.signOut();
-        if (!mounted) return;
-        setState(() => _error =
-            'Your account has been deactivated. Please contact the Clinic Head.');
-        return;
-      }
-
-      await ReferenceCatalog.loadAfterSignIn();
-
-      final profile = accountRow != null
-          ? AppProfile.fromSupabase(accountRow)
-              .withNamesFrom(AccountService.profileFromAuthUser(authUser))
-          : AccountService.profileFromAuthUser(authUser);
-
-      final role = profile.role;
-      final userEmail = authUser.email ?? '';
-      final userUsername = profile.username.isNotEmpty
-          ? profile.username
-          : AccountService.usernameFromAuthEmail(authUser.email);
-      final userName =
-          profile.displayName.isNotEmpty ? profile.displayName : userUsername;
-      final forceChange = profile.mustChangePassword;
-
+    if (email == null || email.isEmpty) {
       if (!mounted) return;
+      setState(() => _error =
+          'DEBUG: no email found for username "$username" '
+          '(lookup failed, not the password).');
+      return;
+    }
 
-      resetTabHistory();
+    final response = await supabaseClient.auth.signInWithPassword(
+      email: email,
+      password: password,
+    );
+    debugPrint('LOGIN: signIn OK for ${response.user?.id}');
 
-      if (forceChange) {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(
-            builder: (_) => ForcePasswordChangeScreen(
-              userRole: role,
-              userEmail: userEmail,
-              userName: userName,
-              userUsername: userUsername,
-            ),
-          ),
-        );
-        return;
-      }
+    final authUser = response.user;
+    if (authUser == null) {
+      if (!mounted) return;
+      setState(() => _error = 'Unable to sign in. Please try again.');
+      return;
+    }
 
+    Map<String, dynamic>? accountRow;
+    try {
+      accountRow = await supabaseClient
+          .from('useraccount')
+          .select()
+          .eq('user_id', authUser.id)
+          .maybeSingle();
+    } catch (e) {
+      debugPrint('LOGIN: useraccount fetch failed: $e');
+    }
+
+    final isActive = accountRow != null && accountRow['is_active'] is bool
+        ? accountRow['is_active'] as bool
+        : _metaIsActive(authUser);
+
+    if (!isActive) {
+      await supabaseClient.auth.signOut();
+      if (!mounted) return;
+      setState(() => _error =
+          'Your account has been deactivated. Please contact the Clinic Head.');
+      return;
+    }
+
+    await ReferenceCatalog.loadAfterSignIn();
+
+    final profile = accountRow != null
+        ? AppProfile.fromSupabase(accountRow)
+            .withNamesFrom(AccountService.profileFromAuthUser(authUser))
+        : AccountService.profileFromAuthUser(authUser);
+
+    final role = profile.role;
+    final userEmail = authUser.email ?? '';
+    final userUsername = profile.username.isNotEmpty
+        ? profile.username
+        : AccountService.usernameFromAuthEmail(authUser.email);
+    final userName =
+        profile.displayName.isNotEmpty ? profile.displayName : userUsername;
+    final forceChange = profile.mustChangePassword;
+
+    if (!mounted) return;
+
+    resetTabHistory();
+
+    if (forceChange) {
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(
-          builder: (_) => ClinicDashboard(
+          builder: (_) => ForcePasswordChangeScreen(
             userRole: role,
             userEmail: userEmail,
             userName: userName,
@@ -178,29 +171,47 @@ class _LoginScreenState extends State<LoginScreen> {
           ),
         ),
       );
-    } on AuthException catch (e) {
-      if (!mounted) return;
-      final message = e.message.toLowerCase();
-      if (message.contains('not confirmed') ||
-          message.contains('email_not_confirmed')) {
-        setState(() => _error =
-            'This account has not been activated yet. Please contact the '
-                'Clinic Head.');
-      } else {
-        setState(() => _error = 'Incorrect username or password.');
-      }
-    } catch (err) {
-      if (!mounted) return;
-      if ('$err'.contains('ACCOUNT_DEACTIVATED')) {
-        setState(() => _error =
-            'Your account has been deactivated. Please contact the Clinic Head.');
-      } else {
-        setState(() => _error = 'Incorrect username or password.');
-      }
-    } finally {
-      if (mounted) setState(() => _submitting = false);
+      return;
     }
+
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ClinicDashboard(
+          userRole: role,
+          userEmail: userEmail,
+          userName: userName,
+          userUsername: userUsername,
+        ),
+      ),
+    );
+  } on AuthException catch (e) {
+    debugPrint('AUTH ERROR: status=${e.statusCode} message=${e.message}');
+    if (!mounted) return;
+    final message = e.message.toLowerCase();
+    if (message.contains('not confirmed') ||
+        message.contains('email_not_confirmed')) {
+      setState(() => _error =
+          'This account has not been activated yet. Please contact the '
+              'Clinic Head.');
+    } else {
+      // TEMP DEBUG: shows the real reason. Change back later.
+      setState(() => _error = 'DEBUG Auth: ${e.message} (${e.statusCode})');
+    }
+  } catch (err) {
+    debugPrint('LOGIN ERROR: $err');
+    if (!mounted) return;
+    if ('$err'.contains('ACCOUNT_DEACTIVATED')) {
+      setState(() => _error =
+          'Your account has been deactivated. Please contact the Clinic Head.');
+    } else {
+      // TEMP DEBUG: shows the real reason. Change back later.
+      setState(() => _error = 'DEBUG Error: $err');
+    }
+  } finally {
+    if (mounted) setState(() => _submitting = false);
   }
+}
 
   bool _metaIsActive(User user) {
     final raw = AccountService.metadataOf(user)['is_active'];
