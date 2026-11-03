@@ -7,7 +7,7 @@ import 'package:clinicmanagementsystem/core/config/supabase_config.dart';
 import 'package:clinicmanagementsystem/features/account/services/account_service.dart';
 import 'package:clinicmanagementsystem/core/services/reference_data_service.dart';
 import 'package:clinicmanagementsystem/core/platform/browser_tabs.dart';
-
+import 'package:clinicmanagementsystem/features/auth/recovery_state.dart';
 import 'package:clinicmanagementsystem/features/auth/widgets/forgot_password_dialog.dart';
 import 'package:clinicmanagementsystem/features/auth/screens/reset_password_screen.dart';
 
@@ -30,29 +30,48 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _recoveryOpen = false;
 
   @override
-  void initState() {
-    super.initState();
+void initState() {
+  super.initState();
+  RecoveryState.pending.addListener(_checkRecovery);
+  WidgetsBinding.instance.addPostFrameCallback((_) => _checkRecovery());
+}
 
-    supabaseClient.auth.onAuthStateChange.listen((data) {
-      if (data.event == AuthChangeEvent.passwordRecovery) _openReset();
-    });
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      final u = Uri.base;
-      final looksLikeRecovery = u.fragment.contains('type=recovery') ||
-          u.queryParameters.containsKey('code');
-      if (looksLikeRecovery && supabaseClient.auth.currentSession != null) {
-        _openReset();
-      }
-    });
+Future<void> _checkRecovery() async {
+  if (!RecoveryState.pending.value || _recoveryOpen) return;
+
+  // Wait up to ~5 seconds for Supabase to finish creating the session.
+  for (var i = 0; i < 20; i++) {
+    if (!mounted) return;
+    if (supabaseClient.auth.currentSession != null) {
+      _openReset();
+      return;
+    }
+    await Future.delayed(const Duration(milliseconds: 250));
   }
 
-  void _openReset() {
-    if (_recoveryOpen || !mounted) return;
-    _recoveryOpen = true;
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(builder: (_) => const ResetPasswordScreen()),
-    );
-  }
+  if (!mounted) return;
+  RecoveryState.pending.value = false;
+  setState(() => _error =
+      'This reset link is invalid or has expired. Please request a new one.');
+}
+
+void _openReset() {
+  if (_recoveryOpen || !mounted) return;
+  _recoveryOpen = true;
+  RecoveryState.pending.value = false;
+  Navigator.of(context).pushReplacement(
+    MaterialPageRoute(builder: (_) => const ResetPasswordScreen()),
+  );
+}
+
+@override
+void dispose() {
+  RecoveryState.pending.removeListener(_checkRecovery);
+  _usernameCtrl.dispose();
+  _passwordCtrl.dispose();
+  _passwordFocus.dispose();
+  super.dispose();
+}
 
   Future<void> _forgotPassword() async {
     await showDialog<void>(
@@ -61,13 +80,7 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
-  @override
-  void dispose() {
-    _usernameCtrl.dispose();
-    _passwordCtrl.dispose();
-    _passwordFocus.dispose();
-    super.dispose();
-  }
+  
 
   Future<void> _login() async {
   final username = _usernameCtrl.text.trim();

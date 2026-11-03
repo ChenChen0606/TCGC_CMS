@@ -1,3 +1,4 @@
+import 'package:clinicmanagementsystem/features/auth/recovery_state.dart';
 import 'package:flutter/material.dart';
 import 'package:clinicmanagementsystem/app/app.dart';
 import 'package:flutter/services.dart';
@@ -9,9 +10,14 @@ import 'package:clinicmanagementsystem/core/platform/browser_tabs.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
+  // Capture the recovery URL before the router/history guard can rewrite it.
+  final launchUri = Uri.base;
+
   installHistoryRouteGuard();
 
   await initSupabase();
+
+  RecoveryState.start(launchUri);
 
   ErrorWidget.builder = (FlutterErrorDetails details) {
     FlutterError.presentError(details);

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-
+import 'package:clinicmanagementsystem/features/auth/recovery_state.dart';
 import 'package:clinicmanagementsystem/core/config/supabase_config.dart';
 import 'package:clinicmanagementsystem/core/theme/app_colors.dart';
 import 'package:clinicmanagementsystem/features/auth/screens/login_screen.dart';
@@ -59,6 +59,7 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
     }
 
     await supabaseClient.auth.signOut();
+    RecoveryState.pending.value = false;
     if (!mounted) return;
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute(builder: (_) => const LoginScreen()),
@@ -87,6 +88,7 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
 
   Future<void> _cancel() async {
     await supabaseClient.auth.signOut();
+    RecoveryState.pending.value = false;
     if (!mounted) return;
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute(builder: (_) => const LoginScreen()),
