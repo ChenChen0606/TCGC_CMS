@@ -37,6 +37,13 @@ void initState() {
 }
 
 Future<void> _checkRecovery() async {
+  if (RecoveryState.linkError != null) {
+    final msg = RecoveryState.linkError;
+    RecoveryState.linkError = null;
+    if (mounted) setState(() => _error = msg);
+    return;
+  }
+
   if (!RecoveryState.pending.value || _recoveryOpen) return;
 
   // Wait up to ~5 seconds for Supabase to finish creating the session.
@@ -52,7 +59,8 @@ Future<void> _checkRecovery() async {
   if (!mounted) return;
   RecoveryState.pending.value = false;
   setState(() => _error =
-      'This reset link is invalid or has expired. Please request a new one.');
+      'This reset link could not be verified. Please request a new one '
+      'in the same browser.');
 }
 
 void _openReset() {
