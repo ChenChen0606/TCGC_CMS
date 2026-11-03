@@ -78,24 +78,25 @@ class _PrintCriteria {
     this.reason = '',
     this.issuedOn,
     this.signatory = '',
+    this.acadYear = '',
+    this.semester = '',
   });
 
   final _PrintReport report;
-
   final DateTimeRange? window;
   final String periodLabel;
-
   final List<String> services;
   final String? institute;
   final String? personId;
   final String? personName;
   final bool blankRows;
-
   final Map<String, String>? certVisit;
   final String excusedFor;
   final String reason;
   final DateTime? issuedOn;
   final String signatory;
+  final String acadYear;
+  final String semester;
 }
 typedef _DayGroup = List<Map<String, String>>;
 
@@ -163,6 +164,20 @@ class RecordsBookletState extends State<RecordsBooklet> {
     'ICS',
     'IAS'
   ];
+
+  static const Map<String, String> _instituteNames = {
+  'ICS': 'Institute of Computer Science',
+  'IAS': 'Institute of Arts and Sciences',
+  'IBFS': 'Institute of Business and Financial Administration',
+  'IHS': 'Institute of Health Sciences',
+  'ITE': 'Institute of Teacher Education',
+  'ICJE': 'Institute of Criminal Justice Education',
+  };
+
+    String _instituteFullName(String code) {
+      final c = code.trim();
+      return _instituteNames[c.toUpperCase()] ?? c;
+    }
 
   final List<Map<String, String>> _allRecords = [];
 
@@ -464,18 +479,24 @@ class RecordsBookletState extends State<RecordsBooklet> {
   }
 
   List<_DayGroup> _groupByDay(List<Map<String, String>> records) {
-    final map = <String, _DayGroup>{};
-    for (final r in records) {
-      final key = '${_idOfRecord(r)}|${(r["date"] ?? '').trim()}';
-      map.putIfAbsent(key, () => []).add(r);
-    }
-    final groups = map.values.toList();
-    for (final g in groups) {
-      g.sort((a, b) =>
-          _timeKey(a["time"] ?? '').compareTo(_timeKey(b["time"] ?? '')));
-    }
-    return groups;
+  final map = <String, _DayGroup>{};
+  for (final r in records) {
+    final key = '${_idOfRecord(r)}|${(r["date"] ?? '').trim()}';
+    map.putIfAbsent(key, () => []).add(r);
   }
+  final groups = map.values.toList();
+  for (final g in groups) {
+    g.sort((a, b) =>
+        _timeKey(a["time"] ?? '').compareTo(_timeKey(b["time"] ?? '')));
+  }
+  groups.sort((a, b) {
+    final byDate = (b.first["date"] ?? '').compareTo(a.first["date"] ?? '');
+    if (byDate != 0) return byDate;
+    return _timeKey(b.last["time"] ?? '')
+        .compareTo(_timeKey(a.last["time"] ?? ''));
+  });
+  return groups;
+}
 
   List<String> _mergedServiceNames(_DayGroup g) {
     final seen = <String>{};
@@ -1167,39 +1188,34 @@ class RecordsBookletState extends State<RecordsBooklet> {
     'Today',
     'This Week',
     'This Month',
-    'This Year',
-    'All Time',
+    'School Year',
     'Custom',
   ];
 
   static DateTimeRange? _windowForPeriod(String period, DateTimeRange? custom) {
-    final DateTime now = DateTime.now();
-    final DateTime today = DateTime(now.year, now.month, now.day);
-    switch (period) {
-      case 'Today':
-        return DateTimeRange(start: today, end: today);
-      case 'This Week':
-        final DateTime start =
-            today.subtract(Duration(days: today.weekday - 1));
-        return DateTimeRange(
-            start: start, end: start.add(const Duration(days: 6)));
-      case 'This Month':
-        return DateTimeRange(
-            start: DateTime(now.year, now.month, 1),
-            end: DateTime(now.year, now.month + 1, 0));
-      case 'This Year':
-        return DateTimeRange(
-            start: DateTime(now.year, 1, 1), end: DateTime(now.year, 12, 31));
-      case 'Custom':
-        if (custom == null) return null;
-        return DateTimeRange(
-            start: DateTime(
-                custom.start.year, custom.start.month, custom.start.day),
-            end: DateTime(custom.end.year, custom.end.month, custom.end.day));
-      default:
-        return null;
-    }
+  final DateTime now = DateTime.now();
+  final DateTime today = DateTime(now.year, now.month, now.day);
+  switch (period) {
+    case 'Today':
+      return DateTimeRange(start: today, end: today);
+    case 'This Week':
+      final DateTime start = today.subtract(Duration(days: today.weekday - 1));
+      return DateTimeRange(
+          start: start, end: start.add(const Duration(days: 6)));
+    case 'This Month':
+      return DateTimeRange(
+          start: DateTime(now.year, now.month, 1),
+          end: DateTime(now.year, now.month + 1, 0));
+    case 'Custom':
+      if (custom == null) return null;
+      return DateTimeRange(
+          start:
+              DateTime(custom.start.year, custom.start.month, custom.start.day),
+          end: DateTime(custom.end.year, custom.end.month, custom.end.day));
+    default:
+      return null; // School Year has no date window
   }
+}
 
   String _rangeText(DateTimeRange r) => r.start == r.end
       ? _fmtShort(r.start)
@@ -1248,6 +1264,15 @@ class RecordsBookletState extends State<RecordsBooklet> {
         return !day.isBefore(w.start) && !day.isAfter(w.end);
       }).toList();
     }
+    if (c.acadYear.isNotEmpty) {
+  list = list.where((e) {
+    if ((e["visitYear"] ?? '') != c.acadYear) return false;
+    if (c.semester.isNotEmpty && (e["visitSemester"] ?? '') != c.semester) {
+      return false;
+    }
+    return true;
+  }).toList();
+}
 
     if (c.services.isNotEmpty) {
       final want = c.services.map((e) => e.trim().toLowerCase()).toSet();
@@ -1482,6 +1507,8 @@ class RecordsBookletState extends State<RecordsBooklet> {
 
     _PrintReport report = _PrintReport.service;
     String period = 'This Month';
+    String acadYear = '';
+  String semester = '';
     DateTimeRange? custom;
     DateTime day = DateTime.now();
     final Set<String> selectedServices = <String>{};
@@ -1508,11 +1535,12 @@ class RecordsBookletState extends State<RecordsBooklet> {
     if (!mounted) return;
     final sigCtrl = TextEditingController(text: sigName);
 
-    String defaultPeriodFor(_PrintReport r) =>
-        r == _PrintReport.individual ? 'All Time' : 'This Month';
+    String defaultPeriodFor(_PrintReport r) => 'This Month';
 
     void resetAll() {
       period = defaultPeriodFor(report);
+      acadYear = '';
+      semester = '';
       custom = null;
       day = DateTime.now();
       selectedServices.clear();
@@ -1557,10 +1585,10 @@ class RecordsBookletState extends State<RecordsBooklet> {
       final bool isDaily = report == _PrintReport.daily;
       final bool isCert = report == _PrintReport.certificate;
       final DateTimeRange? window = isDaily
-          ? DateTimeRange(
-              start: DateTime(day.year, day.month, day.day),
-              end: DateTime(day.year, day.month, day.day))
-          : _windowForPeriod(period, custom);
+    ? DateTimeRange(
+        start: DateTime(day.year, day.month, day.day),
+        end: DateTime(day.year, day.month, day.day))
+    : (period == 'School Year' ? null : _windowForPeriod(period, custom));
       Map<String, String>? certVisit;
       if (isCert) {
         for (final v in _visitsOf(personId ?? '')) {
@@ -1571,28 +1599,27 @@ class RecordsBookletState extends State<RecordsBooklet> {
         }
       }
       return _PrintCriteria(
-        report: report,
-        window: window,
-        periodLabel: window == null ? 'All Records' : _rangeText(window),
-        services: (report == _PrintReport.service || isDaily)
-            ? selectedServices.toList()
-            : const <String>[],
-        institute: report != _PrintReport.individual &&
-                report != _PrintReport.certificate &&
-                institute.isNotEmpty
-            ? institute
-            : null,
-        personId:
-            (report == _PrintReport.individual || isCert) ? personId : null,
-        personName:
-            (report == _PrintReport.individual || isCert) ? personName : null,
-        blankRows: report == _PrintReport.individual && blankRows,
-        certVisit: certVisit,
-        excusedFor: excusedCtrl.text.trim(),
-        reason: reasonCtrl.text.trim(),
-        issuedOn: issueDay,
-        signatory: sigCtrl.text.trim(),
-      );
+          report: report,
+          window: window,
+          periodLabel: window == null ? 'All Records' : _rangeText(window),
+          services: const <String>[],
+          institute: report != _PrintReport.individual &&
+                  report != _PrintReport.certificate &&
+                  institute.isNotEmpty
+              ? institute
+              : null,
+          personId: (report == _PrintReport.individual || isCert) ? personId : null,
+          personName:
+              (report == _PrintReport.individual || isCert) ? personName : null,
+          blankRows: report == _PrintReport.individual && blankRows,
+          certVisit: certVisit,
+          excusedFor: excusedCtrl.text.trim(),
+          reason: reasonCtrl.text.trim(),
+          issuedOn: issueDay,
+          signatory: sigCtrl.text.trim(),
+          acadYear: period == 'School Year' ? acadYear : '',
+          semester: period == 'School Year' ? semester : '',
+        );
     }
 
     final _PrintCriteria? result = await showDialog<_PrintCriteria>(
@@ -1601,8 +1628,7 @@ class RecordsBookletState extends State<RecordsBooklet> {
         builder: (ctx, setDialogState) {
           final bool isCert = report == _PrintReport.certificate;
           final bool showPeriod = report != _PrintReport.daily && !isCert;
-          final bool showService =
-              report == _PrintReport.service || report == _PrintReport.daily;
+          final bool showService = false;
           final bool showInstitute =
               report != _PrintReport.individual && !isCert;
           final bool showPatient = report == _PrintReport.individual || isCert;
@@ -1867,33 +1893,76 @@ class RecordsBookletState extends State<RecordsBooklet> {
                                       side: BorderSide(
                                           color:
                                               period == p ? kPrimary : kBorder),
-                                      onSelected: (_) => setDialogState(() {
-                                        period = p;
-                                        error = null;
-                                      }),
+                                     onSelected: (_) => setDialogState(() {
+                                      period = p;
+                                      if (p == 'School Year' && !_acadYears.contains(acadYear)) {
+                                        final cur = ReferenceCatalog.currentPeriod;
+                                        acadYear = (cur != null && _acadYears.contains(cur.acadYear))
+                                            ? cur.acadYear
+                                            : (_acadYears.isNotEmpty ? _acadYears.first : '');
+                                        semester = (cur != null && cur.acadYear == acadYear) ? cur.semester : '';
+                                      }
+                                      error = null;
+                                    }),
                                     ),
                                 ],
                               ),
                               const SizedBox(height: 8),
                               if (period == 'Custom')
-                                _dlgPickerButton(
-                                  icon: Icons.date_range_outlined,
-                                  text: custom == null
-                                      ? 'Pick a date range'
-                                      : _rangeText(custom!),
-                                  onTap: () async {
-                                    final r = await _pickRange(ctx, custom);
-                                    if (r == null) return;
-                                    setDialogState(() {
-                                      custom = r;
-                                      error = null;
-                                    });
-                                  },
-                                )
-                              else
-                                Text(resolvedText,
-                                    style: const TextStyle(
-                                        fontSize: 12, color: kTextSub)),
+                              _dlgPickerButton(
+                                icon: Icons.date_range_outlined,
+                                text: custom == null ? 'Pick a date range' : _rangeText(custom!),
+                                onTap: () async {
+                                  final r = await _pickRange(ctx, custom);
+                                  if (r == null) return;
+                                  setDialogState(() {
+                                    custom = r;
+                                    error = null;
+                                  });
+                                },
+                              )
+                            else if (period == 'School Year')
+                              Row(children: [
+                                Expanded(
+                                  child: _dlgDropdown(
+                                    value: _acadYears.contains(acadYear) ? acadYear : '',
+                                    items: [
+                                      if (!_acadYears.contains(acadYear))
+                                        const DropdownMenuItem(value: '', child: Text('No school year')),
+                                      for (final y in _acadYears)
+                                        DropdownMenuItem(value: y, child: Text('SY $y')),
+                                    ],
+                                    onChanged: (v) => setDialogState(() {
+                                      acadYear = v ?? '';
+                                      semester = '';
+                                    }),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Builder(builder: (_) {
+                                    final sems = <String>[];
+                                    for (final p in ReferenceCatalog.periodsNewestFirst) {
+                                      if (p.acadYear == acadYear &&
+                                          p.semester.isNotEmpty &&
+                                          !sems.contains(p.semester)) {
+                                        sems.add(p.semester);
+                                      }
+                                    }
+                                    return _dlgDropdown(
+                                      value: sems.contains(semester) ? semester : '',
+                                      items: [
+                                        const DropdownMenuItem(value: '', child: Text('All Semesters')),
+                                        for (final s in sems) DropdownMenuItem(value: s, child: Text(s)),
+                                      ],
+                                      onChanged: (v) => setDialogState(() => semester = v ?? ''),
+                                    );
+                                  }),
+                                ),
+                              ])
+                            else
+                              Text(resolvedText,
+                                  style: const TextStyle(fontSize: 12, color: kTextSub)),
                             ],
                             if (report == _PrintReport.daily) ...[
                               _dlgLabel('Date'),
@@ -2050,7 +2119,28 @@ class RecordsBookletState extends State<RecordsBooklet> {
     await _showPrintPreview(criteria: result);
   }
 
-  Future<void> _showPrintPreview({required _PrintCriteria criteria}) async {
+    Future<void> _showPrintPreview({required _PrintCriteria criteria}) async {
+    final ids = <String>{
+      for (final r in _recordsForPrint(criteria))
+        if ((r["visitId"] ?? '').trim().isNotEmpty) (r["visitId"] ?? '').trim(),
+    }.toList();
+
+    if (ids.isNotEmpty) {
+      try {
+        final saved = await VisitDetailsService.readVisits(ids);
+        if (!mounted) return;
+        setState(() => _savedVisits.addAll(saved));
+      } catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Could not load the visit details for printing: $e'),
+          backgroundColor: kDanger,
+          behavior: SnackBarBehavior.floating,
+        ));
+      }
+    }
+
+    if (!mounted) return;
     await showDialog<void>(
       context: context,
       builder: (_) => _BookletPrintSheet(
@@ -2063,36 +2153,21 @@ class RecordsBookletState extends State<RecordsBooklet> {
     );
   }
 
-  List<List<(String, String)>> _formFields(_PrintCriteria c) {
-    final DateTimeRange? w = c.window;
-    final DateFormat fmt = DateFormat('MMM d, yyyy');
-    final String from = w == null ? 'All' : fmt.format(w.start);
-    final String to = w == null ? 'All' : fmt.format(w.end);
-    final String inst = c.institute ?? 'All Institutes';
-    final String svc =
-        c.services.isEmpty ? 'All Services' : c.services.join(', ');
-    switch (c.report) {
-      case _PrintReport.byInstitute:
-        return [
-          [('INSTITUTE', inst), ('DATE FROM', from), ('DATE TO', to)],
-        ];
-      case _PrintReport.daily:
-        return [
-          [('DATE', from), ('INSTITUTE', inst), ('SERVICE TYPE', svc)],
-        ];
-      case _PrintReport.service:
-        return [
-          [('SERVICE TYPE', svc), ('INSTITUTE', inst)],
-          [('DATE FROM', from), ('DATE TO', to)],
-        ];
-      case _PrintReport.individual:
-        return [
-          [('PATIENT', '${c.personName ?? ''} (${c.personId ?? ''})')],
-          [('DATE FROM', from), ('DATE TO', to)],
-        ];
-      case _PrintReport.certificate:
-        return const [];
+    String _dateLine(_PrintCriteria c) {
+    if (c.acadYear.isNotEmpty) {
+      return 'SY ${c.acadYear}${c.semester.isEmpty ? '' : ' · ${c.semester}'}';
     }
+    final w = c.window;
+    if (w == null) return 'All Records';
+    final s = w.start, e = w.end;
+    if (s == e) return DateFormat('MMM d, yyyy').format(s).toUpperCase();
+    if (s.year != e.year) {
+      return '${DateFormat('MMMM d, yyyy').format(s)} - ${DateFormat('MMMM d, yyyy').format(e)}';
+    }
+    if (s.month == e.month) {
+      return '${DateFormat('MMMM').format(s)} ${s.day}-${e.day}, ${s.year}';
+    }
+    return '${DateFormat('MMMM d').format(s)} - ${DateFormat('MMMM d').format(e)}, ${s.year}';
   }
 
   Future<pw.Document> _buildDocument(
@@ -2100,13 +2175,20 @@ class RecordsBookletState extends State<RecordsBooklet> {
     return BookletPrint.build(
       kind: BookletReportKind.values.byName(criteria.report.name),
       title: criteria.report.paperTitle,
-      fieldLines: _formFields(criteria),
+      dateLine: _dateLine(criteria),
+      nameLine: criteria.personName ?? '',
+      instituteLine: _instituteFullName(
+        criteria.report == _PrintReport.individual
+            ? (_rosterById[(criteria.personId ?? '').trim()]?.institute ?? '')
+            : (criteria.institute ?? ''),
+      ),
       records: _recordsForPrint(criteria),
       visitFor: _visitFor,
       roster: _rosterById,
       pageFormat: pageFormat,
       serviceLabels: criteria.services,
       blankRows: criteria.blankRows,
+      draftLabel: (d, c) => _draftLabel(d, c.vitals),
     );
   }
 
