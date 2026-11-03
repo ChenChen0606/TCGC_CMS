@@ -1,4 +1,3 @@
-
 import 'package:flutter/material.dart';
 import 'dart:async';
 import 'package:intl/intl.dart';
@@ -8,6 +7,10 @@ import 'package:clinicmanagementsystem/features/inventory/screens/medicine_inven
 import 'package:clinicmanagementsystem/features/patients/screens/individual_record_screen.dart';
 import 'package:clinicmanagementsystem/features/vitals/screens/bmi_records_screen.dart';
 import 'package:clinicmanagementsystem/features/visits/services/visit_service.dart';
+import 'package:clinicmanagementsystem/features/visits/services/visit_details_service.dart';
+import 'package:clinicmanagementsystem/features/visits/models/visit_details.dart';
+import 'package:clinicmanagementsystem/features/visits/models/visit_service_forms.dart';
+import 'package:clinicmanagementsystem/features/vitals/models/vitals.dart';
 import 'package:clinicmanagementsystem/features/inventory/services/medicine_service.dart';
 import 'package:clinicmanagementsystem/core/services/data_tracker.dart';
 import 'package:clinicmanagementsystem/core/platform/browser_tabs.dart';
@@ -476,6 +479,15 @@ class _DashboardOverviewState extends State<DashboardOverview> {
   int _outOfStockCount = 0;
   int _lowStockCount = 0;
 
+  /// Recent Consultations shows this many rows per page.
+  static const int _pageSize = 5;
+  int _page = 0;
+
+  /// Full service details of the visits on screen (used to name vital
+  /// signs "BP Taking", "Temperature Checking", ... like the Records Booklet).
+  final Map<String, VisitDetailsController> _details = {};
+  final Set<String> _detailsRequested = {};
+
   VoidCallback? _dataListener;
 
   @override
@@ -503,7 +515,11 @@ class _DashboardOverviewState extends State<DashboardOverview> {
     setState(() => _error = null);
     try {
       final visits = await VisitService.fetchDashboardVisits();
-      if (mounted) setState(() => _visits = visits);
+      if (mounted) {
+        // Re-read the details too, so an edited visit shows its new name.
+        _detailsRequested.clear();
+        setState(() => _visits = visits);
+      }
     } catch (e) {
       if (mounted) setState(() => _error = 'Could not load dashboard data: $e');
     }
@@ -546,6 +562,135 @@ class _DashboardOverviewState extends State<DashboardOverview> {
         _dateString = DateFormat('EEEE, MMMM d, y').format(now);
       });
     }
+  }
+
+  // ── Clock helpers (accept "20:13:00" and "08:13 PM") ──────────────────
+
+  static ({int h, int m})? _parseClock(String t) {
+    final m = RegExp(r'^(\d{1,2}):(\d{2})(?::\d{2})?\s*([AaPp][Mm])?$')
+        .firstMatch(t.trim());
+    if (m == null) return null;
+    var h = int.parse(m.group(1)!);
+    final mi = int.parse(m.group(2)!);
+    final ap = m.group(3)?.toLowerCase();
+    if (ap == 'pm' && h < 12) h += 12;
+    if (ap == 'am' && h == 12) h = 0;
+    return (h: h, m: mi);
+  }
+
+  int _minutes(String t) {
+    final c = _parseClock(t);
+    return c == null ? 0 : c.h * 60 + c.m;
+  }
+
+  /// "20:13:00" -> "8:13 PM"
+  String _fmtTime(String t) {
+    final s = t.trim();
+    if (s.isEmpty || s == '-') return '—';
+    final c = _parseClock(s);
+    if (c == null) return s;
+    final h12 = c.h % 12 == 0 ? 12 : c.h % 12;
+    return '$h12:${c.m.toString().padLeft(2, '0')} ${c.h >= 12 ? 'PM' : 'AM'}';
+  }
+
+  // ── Vital signs named like the Records Booklet ────────────────────────
+
+  static String _norm(String s) =>
+      s.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+
+  static bool _isVitalName(String n) => _norm(n).contains('vital');
+
+  Set<String> _vitalsTaken(ServiceDraft d, VisitVitals v) {
+    final picked = d
+        .chosen(kVitalsSelectedKey)
+        .where((e) => e != kSelectAllLabel)
+        .toSet();
+    if (picked.isNotEmpty) return picked;
+    return {
+      if (v.systolic != null && v.diastolic != null) 'Blood Pressure',
+      if (v.tempC != null) 'Temperature',
+      if (v.heartRate != null) 'Pulse',
+      if (v.respRate != null) 'Respiratory Rate',
+      if (v.o2Sat != null) 'O₂ Saturation',
+    };
+  }
+
+  String _vitalLabel(ServiceDraft d, VisitVitals v) {
+    if (d.serviceId != 'vital_signs') return d.label;
+    final taken = _vitalsTaken(d, v);
+
+    // BP alone, or BP + Pulse together, is one "BP Taking" service.
+    if (taken.contains('Blood Pressure') &&
+        taken.difference({'Blood Pressure', 'Pulse'}).isEmpty) {
+      return 'BP Taking';
+    }
+    if (taken.length == 1) {
+      return switch (taken.first) {
+        'Pulse' => 'Pulse Taking',
+        'Temperature' => 'Temperature Checking',
+        'Respiratory Rate' => 'Respiratory Rate',
+        'O₂ Saturation' => 'SpO₂ Taking',
+        _ => d.label,
+      };
+    }
+    return d.label; // several different vitals -> "Vital signs"
+  }
+
+  /// Service names of a visit; "Vital Signs" is replaced by what was
+  /// actually taken (BP Taking, Temperature Checking, ...) once loaded.
+  List<String> _displayServices(DashboardVisit v) {
+    final c = _details[v.visitId];
+    if (c == null) return v.services;
+    final vit = <String>[
+      for (final d in c.drafts)
+        if (d.serviceId == 'vital_signs') _vitalLabel(d, c.vitals),
+    ];
+    if (vit.isEmpty) return v.services;
+    final out = <String>[];
+    for (final s in v.services) {
+      if (_isVitalName(s)) {
+        for (final l in vit) {
+          if (!out.contains(l)) out.add(l);
+        }
+      } else if (!out.contains(s)) {
+        out.add(s);
+      }
+    }
+    return out;
+  }
+
+  void _requestDetails(List<DashboardVisit> visits) {
+    final missing = [
+      for (final v in visits)
+        if (v.visitId.isNotEmpty && !_detailsRequested.contains(v.visitId))
+          v.visitId
+    ];
+    if (missing.isEmpty) return;
+    _detailsRequested.addAll(missing);
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      try {
+        final got = await VisitDetailsService.readVisits(missing);
+        if (!mounted) return;
+        setState(() => _details.addAll(got));
+      } catch (_) {}
+    });
+  }
+
+  /// Today's visits: the same patient's AM and PM visits become ONE entry
+  /// (like the Records Booklet). Latest first.
+  List<List<DashboardVisit>> _todayGroups() {
+    final map = <String, List<DashboardVisit>>{};
+    for (final v in _visits.where(_isToday)) {
+      final who = v.personId.trim().isNotEmpty ? v.personId.trim() : v.displayName;
+      map.putIfAbsent(who, () => []).add(v);
+    }
+    final groups = map.values.toList();
+    for (final g in groups) {
+      g.sort((a, b) => _minutes(a.visitTime).compareTo(_minutes(b.visitTime)));
+    }
+    groups.sort((a, b) =>
+        _minutes(b.last.visitTime).compareTo(_minutes(a.last.visitTime)));
+    return groups;
   }
 
   @override
@@ -837,8 +982,15 @@ class _DashboardOverviewState extends State<DashboardOverview> {
   }
 
   Widget _consultationsCard() {
-    final todayRecords = _visits.where(_isToday).toList();
-    final shown = todayRecords.take(5).toList();
+    final groups = _todayGroups();
+    final total = groups.length;
+    final pageCount = total == 0 ? 1 : (total + _pageSize - 1) ~/ _pageSize;
+    final page = _page.clamp(0, pageCount - 1).toInt();
+    final start = page * _pageSize;
+    final end = (start + _pageSize) > total ? total : start + _pageSize;
+    final shown = groups.sublist(start, end);
+
+    _requestDetails([for (final g in shown) ...g]);
 
     return _baseCard(
       title: "Recent Consultations",
@@ -863,29 +1015,66 @@ class _DashboardOverviewState extends State<DashboardOverview> {
                     style: TextStyle(fontSize: 12.5, color: Color(0xFF64748B))),
               ),
             )
-          : ListView.builder(
-              padding: EdgeInsets.zero,
-              itemCount: shown.length,
-              itemBuilder: (context, i) {
-                final r = shown[i];
-                Color color;
-                Color bgColor;
-                switch (r.personType) {
-                  case "Faculty":
-                    color = const Color(0xFFD97706);
-                    bgColor = const Color(0xFFFEF3C7);
-                    break;
-                  case "Staff":
-                    color = const Color(0xFF7C3AED);
-                    bgColor = const Color(0xFFEDE9FE);
-                    break;
-                  default:
-                    color = const Color(0xFF2563EB);
-                    bgColor = const Color(0xFFDBEAFE);
-                }
-                return _tile(r, color, bgColor);
-              },
+          : Column(
+              children: [
+                Expanded(
+                  child: ListView.builder(
+                    padding: EdgeInsets.zero,
+                    itemCount: shown.length,
+                    itemBuilder: (context, i) {
+                      final g = shown[i];
+                      Color color;
+                      Color bgColor;
+                      switch (g.first.personType) {
+                        case "Faculty":
+                          color = const Color(0xFFD97706);
+                          bgColor = const Color(0xFFFEF3C7);
+                          break;
+                        case "Staff":
+                          color = const Color(0xFF7C3AED);
+                          bgColor = const Color(0xFFEDE9FE);
+                          break;
+                        default:
+                          color = const Color(0xFF2563EB);
+                          bgColor = const Color(0xFFDBEAFE);
+                      }
+                      return _tile(g, color, bgColor);
+                    },
+                  ),
+                ),
+                _pager(page, pageCount),
+              ],
             ),
+    );
+  }
+
+  Widget _pager(int page, int pageCount) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.end,
+        children: [
+          IconButton(
+            tooltip: 'Previous page',
+            visualDensity: VisualDensity.compact,
+            onPressed: page > 0 ? () => setState(() => _page = page - 1) : null,
+            icon: const Icon(Icons.chevron_left_rounded),
+          ),
+          Text('Page ${page + 1} of $pageCount',
+              style: const TextStyle(
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF0F172A))),
+          IconButton(
+            tooltip: 'Next page',
+            visualDensity: VisualDensity.compact,
+            onPressed: page < pageCount - 1
+                ? () => setState(() => _page = page + 1)
+                : null,
+            icon: const Icon(Icons.chevron_right_rounded),
+          ),
+        ],
+      ),
     );
   }
 
@@ -894,12 +1083,24 @@ class _DashboardOverviewState extends State<DashboardOverview> {
     return label.isEmpty ? '?' : label[0].toUpperCase();
   }
 
-  Widget _tile(DashboardVisit r, Color color, Color bgColor) {
+  /// One tile = one patient for the day (AM + PM visits combined).
+  Widget _tile(List<DashboardVisit> g, Color color, Color bgColor) {
+    final r = g.first;
     final date =
         r.visitDate == null ? '—' : DateFormat('MMM d, y').format(r.visitDate!);
-    final time = r.visitTime.isEmpty ? '—' : r.visitTime;
-    final services =
-        r.services.isEmpty ? 'No services recorded' : r.services.join(', ');
+    final times = [
+      for (final x in g)
+        if (x.visitTime.trim().isNotEmpty) _fmtTime(x.visitTime),
+    ];
+    final timeText = times.isEmpty ? '—' : times.join(' · ');
+
+    final names = <String>[];
+    for (final x in g) {
+      for (final s in _displayServices(x)) {
+        if (!names.contains(s)) names.add(s);
+      }
+    }
+    final services = names.isEmpty ? 'No services recorded' : names.join(', ');
     final aff = r.affiliation;
     final id = r.personId.trim();
 
@@ -938,14 +1139,14 @@ class _DashboardOverviewState extends State<DashboardOverview> {
                             color: Color(0xFF1E293B))),
                   ),
                   const SizedBox(width: 8),
-                  Text('$date • $time',
+                  Text('$date • $timeText',
                       style: const TextStyle(
                           fontSize: 10.5, color: Color(0xFF94A3B8))),
                 ],
               ),
               const SizedBox(height: 3),
               Text(services,
-                  maxLines: 1,
+                  maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                   style:
                       const TextStyle(fontSize: 12, color: Color(0xFF475569))),
