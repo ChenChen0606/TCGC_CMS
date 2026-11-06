@@ -26,65 +26,74 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
     super.dispose();
   }
 
-  Future<void> _save() async {
-  final p = _pass.text;
-  if (p.length < 8) {
-    setState(() => _error = 'Use at least 8 characters.');
-    return;
-  }
-  if (p != _confirm.text) {
-    setState(() => _error = 'The two passwords do not match.');
-    return;
-  }
-  if (_saving) return;
-  setState(() {
-    _saving = true;
-    _error = null;
-  });
+      Future<void> _save() async {
+        final p = _pass.text;
+        final strong = p.length >= 10 &&
+            RegExp(r'[A-Z]').hasMatch(p) &&
+            RegExp(r'[a-z]').hasMatch(p) &&
+            RegExp(r'\d').hasMatch(p);
+        if (!strong) {
+          setState(() => _error =
+              'Password must be at least 10 characters with an uppercase letter, '
+              'a lowercase letter, and a number.');
+          return;
+        }
+        if (p != _confirm.text) {
+          setState(() => _error = 'The two passwords do not match.');
+          return;
+        }
+        if (_saving) return;
+        setState(() {
+          _saving = true;
+          _error = null;
+        });
 
-  try {
-    final res = await supabaseClient.auth.updateUser(UserAttributes(password: p));
-    final changedEmail = res.user?.email ?? 'unknown';
-    debugPrint('RESET: password updated for $changedEmail (${res.user?.id})');
+        // Capture these BEFORE navigating away.
+        final messenger = ScaffoldMessenger.of(context);
+        final nav = Navigator.of(context);
 
-    final uid = supabaseClient.auth.currentUser?.id;
-    if (uid != null) {
-      try {
-        await supabaseClient
-            .from('useraccount')
-            .update({'must_change_password': false}).eq('user_id', uid);
-      } catch (e) {
-        debugPrint('RESET: useraccount update failed: $e');
+        try {
+          final res =
+              await supabaseClient.auth.updateUser(UserAttributes(password: p));
+          final changedEmail = res.user?.email ?? 'unknown';
+          debugPrint('RESET: password updated for $changedEmail (${res.user?.id})');
+
+          final uid = supabaseClient.auth.currentUser?.id;
+          if (uid != null) {
+            try {
+              await supabaseClient
+                  .from('useraccount')
+                  .update({'must_change_password': false}).eq('user_id', uid);
+            } catch (e) {
+              debugPrint('RESET: useraccount update failed: $e');
+            }
+          }
+
+          await supabaseClient.auth.signOut();
+          RecoveryState.pending.value = false;
+
+          nav.pushAndRemoveUntil(
+            MaterialPageRoute(builder: (_) => const LoginScreen()),
+            (_) => false,
+          );
+          messenger.showSnackBar(SnackBar(
+            duration: const Duration(seconds: 8),
+            content: Text('Password changed for $changedEmail. '
+                'Please sign in with your new password.'),
+          ));
+          return;
+        } on AuthException catch (e) {
+          debugPrint('RESET ERROR: ${e.statusCode} ${e.message}');
+          if (!mounted) return;
+          setState(() => _error = e.message);
+        } catch (e) {
+          debugPrint('RESET ERROR: $e');
+          if (!mounted) return;
+          setState(() => _error = 'Could not change the password: $e');
+        } finally {
+          if (mounted) setState(() => _saving = false);
+        }
       }
-    }
-
-    await supabaseClient.auth.signOut();
-    RecoveryState.pending.value = false;
-    if (!mounted) return;
-    Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute(builder: (_) => const LoginScreen()),
-      (_) => false,
-    );
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      final ctx = Navigator.of(context, rootNavigator: true).context;
-      ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
-        duration: const Duration(seconds: 8),
-        content: Text('Password changed for $changedEmail. '
-            'Please sign in with your new password.'),
-      ));
-    });
-  } on AuthException catch (e) {
-    debugPrint('RESET ERROR: ${e.statusCode} ${e.message}');
-    if (!mounted) return;
-    setState(() => _error = e.message);
-  } catch (e) {
-    debugPrint('RESET ERROR: $e');
-    if (!mounted) return;
-    setState(() => _error = 'Could not change the password: $e');
-  } finally {
-    if (mounted) setState(() => _saving = false);
-  }
-}
 
   Future<void> _cancel() async {
     await supabaseClient.auth.signOut();

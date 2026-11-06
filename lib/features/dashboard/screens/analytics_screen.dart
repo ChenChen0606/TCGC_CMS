@@ -221,7 +221,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
       if (mounted) setState(() => _medicines = meds);
     } catch (_) {}
   }
-
+  
   Future<void> _loadVisits() async {
     setState(() {
       _loadingVisits = true;
@@ -290,13 +290,14 @@ class _ReportsScreenState extends State<ReportsScreen> {
       while (true) {
         final rows = await supabaseClient.from('clinic_visits').select('''
           visit_id, person_id, visit_date, visit_time, reason_for_visit, created_at,
+          academic_period_id,
+          academic_periods!left(acad_year, semester),
           individual_records!left(
             fn, mn, ln, person_type,
             individual_academic_records!left(
               status,
               institutes!left(code),
-              program!left(code),
-              academic_periods!left(acad_year, semester)
+              program!left(code)
             )
           ),
           clinic_visit_services!left(
@@ -324,16 +325,12 @@ class _ReportsScreenState extends State<ReportsScreen> {
         final institute = _asMap(acad['institutes']);
         final program = _asMap(acad['program']);
 
-        final vPeriods = <({String year, String semester})>[];
-        for (final a in acadList) {
-          final p = _asMap(a['academic_periods']);
-          final y = '${p['acad_year'] ?? ''}'.trim();
-          final s = '${p['semester'] ?? ''}'.trim();
-          if (y.isEmpty) continue;
-          if (!vPeriods.any((e) => e.year == y && e.semester == s)) {
-            vPeriods.add((year: y, semester: s));
-          }
-        }
+        final vp = _asMap(row['academic_periods']);
+        final vy = '${vp['acad_year'] ?? ''}'.trim();
+        final vs = '${vp['semester'] ?? ''}'.trim();
+        final vPeriods = <({String year, String semester})>[
+          if (vy.isNotEmpty) (year: vy, semester: vs),
+        ];
 
         final services = <String>[];
         final codes = <String, String>{};
@@ -1085,7 +1082,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
             value: _selectedAcadYear,
             options: ['All', ..._availableAcadYears],
             allLabel: 'All Years',
-            labelOf: (o) => _hasRecords(o) ? o : '$o · no record',
+            labelOf: (o) => _hasRecords(o) ? o : '$o',
             onChanged: (v) => setState(() {
               _selectedAcadYear = v;
               _selectedSemester = 'All';
@@ -1100,7 +1097,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
               options: ['All', ..._availableSemesters],
               allLabel: 'All Semesters',
               labelOf: (o) =>
-                  _hasRecords(_selectedAcadYear, o) ? o : '$o · no record',
+                  _hasRecords(_selectedAcadYear, o) ? o : '$o',
               onChanged: (v) => setState(() {
                 _selectedSemester = v;
                 _page = 0;

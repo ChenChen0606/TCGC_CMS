@@ -106,7 +106,7 @@ class _ClinicVisitScreenState extends State<ClinicVisitScreen> {
 
   DateTime? _checkedInAt;
 
-    DateTime? _timeOutAt; // null = not edited -> server time when saved
+  DateTime? _timeOutAt; // null = not edited -> server time when saved
   bool _timeInEdited = false;
   Duration _serverOffset = Duration.zero;
 

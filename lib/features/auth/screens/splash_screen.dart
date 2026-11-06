@@ -1,6 +1,9 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:clinicmanagementsystem/features/auth/screens/login_screen.dart';
+import 'package:clinicmanagementsystem/features/auth/screens/reset_password_screen.dart';
+import 'package:clinicmanagementsystem/features/auth/recovery_state.dart';
+import 'package:clinicmanagementsystem/core/config/supabase_config.dart';
 import 'package:clinicmanagementsystem/core/theme/app_colors.dart';
 
 class SplashScreen extends StatefulWidget {
@@ -14,15 +17,43 @@ class _SplashScreenState extends State<SplashScreen> {
   @override
   void initState() {
     super.initState();
+    _route();
+  }
 
-    Timer(const Duration(seconds: 3), () {
-      if (mounted) {
+  Future<void> _route() async {
+    await Future.delayed(const Duration(seconds: 3));
+    if (!mounted) return;
+
+    // Opened from a password reset email link
+    if (RecoveryState.pending.value) {
+      // Wait up to ~5 seconds for Supabase to create the recovery session.
+      for (var i = 0;
+          i < 20 && supabaseClient.auth.currentSession == null;
+          i++) {
+        await Future.delayed(const Duration(milliseconds: 250));
+        if (!mounted) return;
+      }
+
+      if (supabaseClient.auth.currentSession != null) {
+        RecoveryState.pending.value = false;
         Navigator.pushReplacement(
           context,
-          MaterialPageRoute(builder: (context) => const LoginScreen()),
+          MaterialPageRoute(builder: (_) => const ResetPasswordScreen()),
         );
+        return;
       }
-    });
+
+      // The link did not produce a session. Show an error on the login page.
+      RecoveryState.pending.value = false;
+      RecoveryState.linkError =
+          'This reset link could not be verified. Please request a new one '
+          'in the same browser.';
+    }
+
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(builder: (_) => const LoginScreen()),
+    );
   }
 
   @override

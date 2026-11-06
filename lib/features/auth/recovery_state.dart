@@ -8,21 +8,13 @@ class RecoveryState {
   static String? linkError;
   static bool _started = false;
 
-  /// Called from main() right after initSupabase(), with the URL captured at launch.
+  /// Call right AFTER initSupabase(), passing the URI captured
+  /// at the very top of main() (before Supabase rewrites the URL).
   static void start(Uri launchUri) {
     if (_started) return;
     _started = true;
 
-    final full = launchUri.toString();
-    debugPrint('RECOVERY launch url: $full');
-
-    if (full.contains('error_code=') || full.contains('error=access_denied')) {
-      linkError = 'This reset link is invalid or has expired. '
-          'Please request a new one.';
-    } else if (full.contains('type=recovery') ||
-        launchUri.queryParameters.containsKey('code')) {
-      pending.value = true;
-    }
+    _inspectLaunchUri(launchUri);
 
     supabaseClient.auth.onAuthStateChange.listen((data) {
       debugPrint('AUTH EVENT: ${data.event}');
@@ -30,5 +22,23 @@ class RecoveryState {
         pending.value = true;
       }
     });
+  }
+
+  static void _inspectLaunchUri(Uri uri) {
+    final full = uri.toString();
+    debugPrint('RECOVERY launch url: $full');
+
+    final hasError = full.contains('error_code=') ||
+        full.contains('error=access_denied') ||
+        full.contains('otp_expired');
+    final isRecovery =
+        full.contains('type=recovery') || RegExp(r'[?&#]code=').hasMatch(full);
+
+    if (hasError) {
+      linkError = 'This reset link is invalid or has expired. '
+          'Please request a new one.';
+    } else if (isRecovery) {
+      pending.value = true;
+    }
   }
 }

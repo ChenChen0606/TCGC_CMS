@@ -10,12 +10,32 @@ import 'package:clinicmanagementsystem/core/platform/browser_tabs.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Capture the recovery URL before the router/history guard can rewrite it.
+  // Capture the URL before anything can rewrite it.
   final launchUri = Uri.base;
+  debugPrint('MAIN launch uri: $launchUri');
 
-  installHistoryRouteGuard();
-
+  // Supabase must read the code/token BEFORE the history guard runs.
   await initSupabase();
+
+  // Fallback: code present but Supabase did not create a session.
+  final code = launchUri.queryParameters['code'];
+  if (code != null) {
+    // Let Supabase's own auto-exchange finish first (a code is single-use).
+    for (var i = 0;
+        i < 8 && supabaseClient.auth.currentSession == null;
+        i++) {
+      await Future.delayed(const Duration(milliseconds: 250));
+    }
+    if (supabaseClient.auth.currentSession == null) {
+      try {
+        await supabaseClient.auth.exchangeCodeForSession(code);
+      } catch (e) {
+        debugPrint('RECOVERY: manual code exchange failed: $e');
+      }
+    }
+  }
+
+  installHistoryRouteGuard(); // AFTER Supabase has consumed the URL
 
   RecoveryState.start(launchUri);
 
