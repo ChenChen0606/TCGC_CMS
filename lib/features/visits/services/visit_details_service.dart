@@ -53,6 +53,28 @@ class VisitDetailsService {
 
   static final Map<String, VisitDetailsController> _recentSaved = {};
 
+  /// service_types never change while the app runs, so it is read once.
+  static Map<String, String>? _typeMapCache;
+
+  static Future<Map<String, String>> _dartByType() async {
+    final cached = _typeMapCache;
+    if (cached != null) return cached;
+    final types = await supabaseClient
+        .from('service_types')
+        .select('service_type_id, service_code');
+    final map = dartIdByServiceTypeId(types);
+    if (map.isNotEmpty) _typeMapCache = map;
+    return map;
+  }
+
+  static const int _inChunk = 80;
+
+  static List<List<T>> _chunks<T>(List<T> list) => [
+        for (var i = 0; i < list.length; i += _inChunk)
+          list.sublist(
+              i, i + _inChunk > list.length ? list.length : i + _inChunk),
+      ];
+
   static VisitDetailsController _snapshotOf(VisitDetailsController src) {
     final copy = VisitDetailsController(
       serviceIds: [for (final d in src.drafts) d.serviceId],
@@ -115,10 +137,7 @@ class VisitDetailsService {
 
     Map<String, String> byType = const {};
     try {
-      final types = await supabaseClient
-          .from('service_types')
-          .select('service_type_id, service_code');
-      byType = dartIdByServiceTypeId(types);
+      byType = await _dartByType();
     } catch (_) {}
 
     try {
@@ -159,9 +178,22 @@ class VisitDetailsService {
   ) async {
     if (visitServiceByDart.isEmpty) return null;
     final rows = await loadServiceRecords(visitServiceByDart.values.toList());
+    return _applyRecords(serviceData, visitServiceByDart, (id) => rows[id]);
+  }
+
+  static VisitVitals? _applyRecords(
+    Map<String, Map<String, dynamic>> serviceData,
+    Map<String, String> visitServiceByDart,
+    Map<String, dynamic>? Function(String visitServiceId) recordFor,
+  ) {
     VisitVitals? vitals;
-    for (final e in visitServiceByDart.entries) {
-      final row = rows[e.value];
+    const owners = {'vital_signs', 'bpi'};
+    final ordered = [
+      ...visitServiceByDart.entries.where((e) => !owners.contains(e.key)),
+      ...visitServiceByDart.entries.where((e) => owners.contains(e.key)),
+    ];
+    for (final e in ordered) {
+      final row = recordFor(e.value);
       if (row == null) continue;
       applyServiceRecordTo(
           dartServiceId: e.key, row: row, data: serviceData[e.key]!);
@@ -173,39 +205,71 @@ class VisitDetailsService {
     return vitals;
   }
 
+  /// Reads the saved details of many visits at once.
+  ///
+  /// Before: one query round PER VISIT (100 visits = 100 sequential waits).
+  /// Now: the services, medicines and every service answer are fetched in a
+  /// few batched, parallel requests no matter how many visits there are.
   static Future<Map<String, VisitDetailsController>> readVisits(
       List<String> visitIds) async {
     if (visitIds.isEmpty) return const {};
+    final ids = visitIds.toSet().toList();
 
     Map<String, String> byType;
     try {
-      final types = await supabaseClient
-          .from('service_types')
-          .select('service_type_id, service_code');
-      byType = dartIdByServiceTypeId(types);
+      byType = await _dartByType();
     } catch (_) {
       return _withRecentSaved({}, visitIds);
     }
 
-    List<dynamic> serviceRows;
+    final chunks = _chunks(ids);
+    final serviceRows = <Map<String, dynamic>>[];
+    final medicinesByVisit = <String, List<MedicineDose>>{};
     try {
-      serviceRows = await supabaseClient
-          .from('clinic_visit_services')
-          .select(
-              'visit_id, visit_service_id, service_type_id, status, created_at')
-          .inFilter('visit_id', visitIds)
-          .order('created_at');
+      final svcF = Future.wait(chunks.map((c) async {
+        final rows = await supabaseClient
+            .from('clinic_visit_services')
+            .select(
+                'visit_id, visit_service_id, service_type_id, status, created_at')
+            .inFilter('visit_id', c)
+            .order('created_at');
+        return [for (final r in rows) Map<String, dynamic>.from(r)];
+      }));
+      final medF = Future.wait(chunks.map((c) => _medicinesForVisits(c)));
+      final svcParts = await svcF;
+      final medParts = await medF;
+      for (final p in svcParts) {
+        serviceRows.addAll(p);
+      }
+      for (final m in medParts) {
+        medicinesByVisit.addAll(m);
+      }
     } catch (_) {
       return _withRecentSaved({}, visitIds);
     }
-
-    final medicinesByVisit = await _medicinesForVisits(visitIds);
 
     final byVisit = <String, List<Map<String, dynamic>>>{};
     for (final r in serviceRows) {
       final visitId = r['visit_id'] as String?;
       if (visitId == null || visitId.isEmpty) continue;
-      byVisit.putIfAbsent(visitId, () => []).add(r.cast<String, dynamic>());
+      byVisit.putIfAbsent(visitId, () => []).add(r);
+    }
+
+    // ONE batched read of all service answers (was: one read per visit).
+    final allServiceIds = <String>{
+      for (final list in byVisit.values)
+        for (final s in list)
+          if ('${s['visit_service_id'] ?? ''}'.isNotEmpty)
+            '${s['visit_service_id']}',
+    }.toList();
+    final parts = await Future.wait(
+        _chunks(allServiceIds).map((c) => loadServiceRecords(c)));
+    Map<String, dynamic>? recordFor(String id) {
+      for (final p in parts) {
+        final r = p[id];
+        if (r != null) return r;
+      }
+      return null;
     }
 
     final out = <String, VisitDetailsController>{};
@@ -225,7 +289,8 @@ class VisitDetailsService {
       final serviceData = <String, Map<String, dynamic>>{
         for (final id in serviceIds) id: <String, dynamic>{},
       };
-      final visitVitals = await _detailsInto(serviceData, visitServiceByDart);
+      final visitVitals =
+          _applyRecords(serviceData, visitServiceByDart, recordFor);
 
       controller.hydrate(
         serviceData: serviceData,

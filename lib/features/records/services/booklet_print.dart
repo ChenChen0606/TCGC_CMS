@@ -1,3 +1,4 @@
+
 import 'package:clinicmanagementsystem/features/patients/models/individual_record_data.dart';
 import 'package:intl/intl.dart';
 import 'package:pdf/pdf.dart';
@@ -294,7 +295,7 @@ List<_Line> _linesFor(_Ctx x, bool impression) {
         _Line(
           code,
           x.label,
-           [
+          [
             if (bp.isNotEmpty)
               '$bp${_bpClass(x).isEmpty ? '' : ' (${_bpClass(x)})'}',
             if (pr.isNotEmpty) 'PR $pr',
@@ -480,6 +481,7 @@ class _V {
     required this.drafts,
     required this.vc,
     required this.when,
+    this.parts,
   });
   final Map<String, String> record;
   final String name, id, inst, group, year, type, complaint, date;
@@ -490,6 +492,10 @@ class _V {
   final List<ServiceDraft> drafts;
   final VisitDetailsController? vc;
   final DateTime? when;
+
+  /// When AM and PM visits of the same person on the same date are merged
+  /// into one row, the original visits are kept here.
+  final List<_V>? parts;
 }
 
 String _idOf(Map<String, String> r) {
@@ -580,11 +586,59 @@ _V _visit(
   );
 }
 
+/// Same person + same date = ONE row (AM and PM visits together),
+/// exactly like the table on the screen.
+List<_V> _mergeSameDay(List<_V> vs) {
+  final order = <String>[];
+  final groups = <String, List<_V>>{};
+  for (final v in vs) {
+    final key = '${v.id}|${v.date.trim()}';
+    if (!groups.containsKey(key)) order.add(key);
+    groups.putIfAbsent(key, () => []).add(v);
+  }
+  return [
+    for (final k in order)
+      groups[k]!.length == 1 ? groups[k]!.first : _combine(groups[k]!),
+  ];
+}
+
+_V _combine(List<_V> g) {
+  final f = g.first;
+  final complaints = <String>[];
+  for (final v in g) {
+    if (v.complaint.isNotEmpty && !complaints.contains(v.complaint)) {
+      complaints.add(v.complaint);
+    }
+  }
+  return _V(
+    record: f.record,
+    name: f.name,
+    id: f.id,
+    inst: f.inst,
+    group: f.group,
+    year: f.year,
+    type: f.type,
+    complaint: complaints.join(' / '),
+    date: f.date,
+    tin: g.map((v) => v.tin).join('\n'),
+    tout: g.map((v) => v.tout).join('\n'),
+    stay: '—',
+    open: g.any((v) => v.open),
+    by: f.by,
+    lines: [for (final v in g) ...v.lines],
+    codes: [for (final v in g) ...v.codes],
+    drafts: [for (final v in g) ...v.drafts],
+    vc: f.vc,
+    when: f.when,
+    parts: g,
+  );
+}
+
 pw.Widget _cell(String t,
-    {bool bold = false, bool center = false, double size = 8}) {
+    {bool bold = false, bool center = false, double size = 9}) {
   return pw.Container(
     alignment: center ? pw.Alignment.center : pw.Alignment.centerLeft,
-    padding: const pw.EdgeInsets.symmetric(horizontal: 3, vertical: 3),
+    padding: const pw.EdgeInsets.symmetric(horizontal: 4, vertical: 4),
     child: pw.Text(
       t,
       textAlign: center ? pw.TextAlign.center : pw.TextAlign.left,
@@ -597,13 +651,13 @@ pw.Widget _cell(String t,
 }
 
 pw.Widget _nameCell(_V v) => pw.Padding(
-      padding: const pw.EdgeInsets.all(3),
+      padding: const pw.EdgeInsets.all(4),
       child: pw.Column(
         crossAxisAlignment: pw.CrossAxisAlignment.start,
         children: [
           pw.Text(v.name,
-              style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold)),
-          pw.Text(v.id, style: const pw.TextStyle(fontSize: 7)),
+              style: pw.TextStyle(fontSize: 9, fontWeight: pw.FontWeight.bold)),
+          pw.Text(v.id, style: const pw.TextStyle(fontSize: 7.5)),
         ],
       ),
     );
@@ -611,7 +665,7 @@ pw.Widget _nameCell(_V v) => pw.Padding(
 pw.Widget _linesCell(List<_Line> ls) {
   if (ls.isEmpty) return _cell('—');
   return pw.Padding(
-    padding: const pw.EdgeInsets.all(3),
+    padding: const pw.EdgeInsets.all(4),
     child: pw.Column(
       crossAxisAlignment: pw.CrossAxisAlignment.start,
       children: [
@@ -623,10 +677,10 @@ pw.Widget _linesCell(List<_Line> ls) {
               children: [
                 pw.Text(l.label,
                     style: pw.TextStyle(
-                        fontSize: 7.5, fontWeight: pw.FontWeight.bold)),
+                        fontSize: 8.5, fontWeight: pw.FontWeight.bold)),
                 if (l.stacked.isNotEmpty)
                   pw.Text(l.stacked,
-                      style: const pw.TextStyle(fontSize: 7.5)),
+                      style: const pw.TextStyle(fontSize: 8.5)),
               ],
             ),
           ),
@@ -649,7 +703,7 @@ pw.Widget _table(
         decoration: const pw.BoxDecoration(color: _headFill),
         children: [
           for (final h in headers)
-            _cell(h, bold: true, center: true, size: 7.5),
+            _cell(h, bold: true, center: true, size: 8.5),
         ],
       ),
       for (final r in rows) pw.TableRow(children: r),
@@ -682,7 +736,7 @@ pw.Widget _svcTable(List<List<String>> rows,
           for (final t in r)
             pw.Container(
               height: minHeight > 0 ? minHeight : null,
-              child: _cell(t, bold: header, center: header, size: 7.5),
+              child: _cell(t, bold: header, center: header, size: 8.5),
             ),
         ]),
     ],
@@ -710,7 +764,7 @@ pw.Widget _individualTable(List<_V> vs, bool blankRows) {
               ? _svcTable([
                   ['SERVICE', 'FINDINGS', 'TREATMENT / ACTION']
                 ], header: true)
-              : _cell(h, bold: true, center: true, size: 7.5),
+              : _cell(h, bold: true, center: true, size: 8.5),
       ],
     ),
   ];
@@ -823,6 +877,11 @@ pw.Widget _totalBox(String text) => pw.Align(
     );
 
 abstract final class BookletPrint {
+  // The header/footer artwork never changes, so it is loaded once and reused
+  // every time the preview or the printer rebuilds the PDF.
+  static String? _headerCache;
+  static String? _footerCache;
+
   /// [dateLine]      e.g. "NOV 2, 2026", "November 2-8, 2026",
   ///                 "October 28 - November 3, 2026", "SY 2025-2026 · Summer".
   /// [nameLine]      patient name (Individual Client Record only).
@@ -849,8 +908,8 @@ abstract final class BookletPrint {
     final m = DocMetrics(f);
     final hang = f.width * 0.04;
 
-    final headerSvg = await loadSheetHeaderSvg();
-    final footerSvg = (await loadSheetFooterSvg())
+    final headerSvg = _headerCache ??= await loadSheetHeaderSvg();
+    final footerSvg = _footerCache ??= (await loadSheetFooterSvg())
         .replaceFirst(
             'textLength="215" lengthAdjust="spacingAndGlyphs">LEARN TODAY',
             'textLength="170" lengthAdjust="spacingAndGlyphs">LUX MUNDI')
@@ -863,10 +922,11 @@ abstract final class BookletPrint {
       _ => kShowImpressionOnDailyAndInstitute,
     };
 
-    var vs = [
+    // Same person + same date (AM and PM) become ONE row, like the screen.
+    var vs = _mergeSameDay([
       for (final r in records)
         _visit(r, visitFor(r), roster, selected, impression, draftLabel),
-    ];
+    ]);
     if (kind == BookletReportKind.individual) vs = vs.reversed.toList();
 
     final body = <pw.Widget>[];
@@ -937,12 +997,12 @@ abstract final class BookletPrint {
               if (kind == BookletReportKind.individual)
                 pw.Expanded(
                   child: pw.Text('Name: $nameLine',
-                      style: const pw.TextStyle(fontSize: 8.5)),
+                      style: const pw.TextStyle(fontSize: 10)),
                 )
               else
                 pw.Spacer(),
               pw.Text('Date: $dateLine',
-                  style: const pw.TextStyle(fontSize: 8.5)),
+                  style: const pw.TextStyle(fontSize: 10)),
             ],
           ),
           pw.SizedBox(height: 8),
@@ -953,7 +1013,7 @@ abstract final class BookletPrint {
               padding: const pw.EdgeInsets.only(top: 4),
               child: pw.Text('—  visit still open (no time out yet)',
                   style: pw.TextStyle(
-                      fontSize: 7.5, fontStyle: pw.FontStyle.italic)),
+                      fontSize: 8, fontStyle: pw.FontStyle.italic)),
             ),
           pw.SizedBox(height: 18),
           _signatures(withRoles: kind == BookletReportKind.daily),
@@ -978,10 +1038,21 @@ abstract final class BookletPrint {
         final rows = <List<pw.Widget>>[];
         for (var i = 0; i < vs.length; i++) {
           final v = vs[i];
-          final d = v.drafts.isEmpty ? null : v.drafts.first;
-          final cells = (d == null || v.vc == null)
-              ? List<String>.filled(spec.headers.length, '')
-              : spec.cells(_Ctx(d, v.vc!, v.when, d.label));
+          // A merged row (AM + PM) shows one line per visit inside each cell.
+          final sessions = v.parts ?? [v];
+          final per = [
+            for (final s in sessions)
+              (s.drafts.isEmpty || s.vc == null)
+                  ? List<String>.filled(spec.headers.length, '')
+                  : spec.cells(_Ctx(
+                      s.drafts.first, s.vc!, s.when, s.drafts.first.label)),
+          ];
+          final cells = [
+            for (var c = 0; c < spec.headers.length; c++)
+              per
+                  .map((p) => p[c].isEmpty && per.length > 1 ? '-' : p[c])
+                  .join('\n'),
+          ];
           rows.add([
             _cell('${i + 1}', center: true),
             _cell(_pretty(v.date, 'MMM d'), center: true),
@@ -1037,11 +1108,10 @@ abstract final class BookletPrint {
       [.45, .8, .8, .8, 1.7, .7, 2.2, 4.0],
       rows,
     ));
-  
   }
 
   /// Daily Clinic Visit Report: no STAY column, no totals.
-   static void _daily(List<pw.Widget> out, List<_V> vs) {
+  static void _daily(List<pw.Widget> out, List<_V> vs) {
     final rows = <List<pw.Widget>>[];
     for (var i = 0; i < vs.length; i++) {
       final v = vs[i];
@@ -1050,7 +1120,7 @@ abstract final class BookletPrint {
         _cell(v.tin, center: true),
         _cell(v.tout, center: true),
         _nameCell(v),
-        _cell(v.inst, center: true, size: 7),
+        _cell(v.inst, center: true, size: 8),
         _cell(v.complaint),
         _linesCell(v.lines),
       ]);
@@ -1076,9 +1146,13 @@ abstract final class BookletPrint {
     final rows = <List<pw.Widget>>[];
     for (var i = 0; i < vs.length; i++) {
       final v = vs[i];
+      // Merged rows list each visit's time on its own line.
+      final times = v.parts == null
+          ? '${v.tin} - ${v.tout}'
+          : v.parts!.map((p) => '${p.tin} - ${p.tout}').join('\n');
       rows.add([
         _cell('${i + 1}', center: true),
-        _cell('${v.tin} - ${v.tout}', center: true),
+        _cell(times, center: true),
         _cell(v.name),
         _cell(v.group),
         _cell(v.year, center: true),

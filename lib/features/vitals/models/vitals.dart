@@ -1,6 +1,7 @@
+
+import 'package:clinicmanagementsystem/features/vitals/models/who_bmi.dart';
 import 'package:clinicmanagementsystem/features/vitals/models/vital_classifier.dart';
 import 'package:clinicmanagementsystem/features/vitals/models/vitals_bands.dart';
-
 export 'package:clinicmanagementsystem/features/vitals/models/vitals_bands.dart';
 
 class VitalsThresholds {
@@ -203,6 +204,17 @@ class VisitVitals {
 
   DateTime? measuredAt;
 
+  // Who is being measured: WHO BMI needs sex + age.
+  String sex = '';
+  DateTime? birthDate;
+  DateTime? asOf;
+
+  void setSubject({String? sex, DateTime? birthDate, DateTime? asOf}) {
+    this.sex = (sex ?? '').trim();
+    this.birthDate = birthDate;
+    this.asOf = asOf;
+  }
+
   final Map<String, String> interpretations = {};
 
   final Map<String, String> enteredBy = {};
@@ -237,8 +249,22 @@ class VisitVitals {
   double? get bmi =>
       VitalsInterpreter.bmiFrom(heightCm: heightCm, weightKg: weightKg);
 
-  VitalReading? get bmiReading =>
-      VitalsInterpreter.bmi(heightCm: heightCm, weightKg: weightKg);
+   VitalReading? get bmiReading => WhoBmi.reading(
+        heightCm: heightCm,
+        weightKg: weightKg,
+        sex: sex,
+        birthDate: birthDate,
+        asOf: asOf ?? DateTime.now(),
+      );
+
+  String? get bmiBlockReason => WhoBmi.blockReason(
+        heightCm: heightCm,
+        weightKg: weightKg,
+        sex: sex,
+        birthDate: birthDate,
+        asOf: asOf ?? DateTime.now(),
+      );
+
 
   List<VitalReading> get readings => [
         bloodPressure,
@@ -267,6 +293,9 @@ class VisitVitals {
     ..heightCm = heightCm
     ..weightKg = weightKg
     ..measuredAt = measuredAt
+    ..sex = sex
+    ..birthDate = birthDate
+    ..asOf = asOf
     ..interpretations.addAll(interpretations)
     ..enteredBy.addAll(enteredBy);
 

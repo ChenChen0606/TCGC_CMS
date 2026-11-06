@@ -85,6 +85,32 @@ class ProcedureService {
         .toList();
   }
 
+  /// Only the procedures linked to the given visits (used by the Records
+  /// Booklet so it does not download the whole table on every open).
+  static Future<List<ProcedureRecord>> fetchForVisits(
+      List<String> visitIds) async {
+    final ids =
+        visitIds.map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+    if (ids.isEmpty) return const [];
+
+    const chunk = 80;
+    final parts = await Future.wait([
+      for (var i = 0; i < ids.length; i += chunk)
+        supabaseClient
+            .from('procedures')
+            .select()
+            .inFilter('visit_id',
+                ids.sublist(i, i + chunk > ids.length ? ids.length : i + chunk))
+            .order('performed_at', ascending: false),
+    ]);
+
+    return [
+      for (final rows in parts)
+        for (final r in rows)
+          ProcedureRecord.fromSupabase(Map<String, dynamic>.from(r)),
+    ];
+  }
+
   static Future<ProcedureRecord> create({
     required String patientId,
     required String patientNo,

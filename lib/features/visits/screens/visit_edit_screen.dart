@@ -115,6 +115,17 @@ class _VisitEditScreenState extends State<VisitEditScreen> {
 
   Future<void> _save() async {
     if (_saving) return;
+        if (_details.draftFor('bpi') != null) {
+      final why = _details.vitals.bmiBlockReason;
+      if (why != null) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(why),
+          backgroundColor: AppColors.warning,
+          behavior: SnackBarBehavior.floating,
+        ));
+        return;
+      }
+    }
 
     final confirmed = await showDialog<bool>(
       context: context,

@@ -1,4 +1,6 @@
+
 // ignore_for_file: deprecated_member_use, avoid_web_libraries_in_flutter
+
 import 'dart:async';
 import 'dart:html' as html;
 import 'package:flutter/widgets.dart';
@@ -10,10 +12,22 @@ StreamSubscription<html.PopStateEvent>? _popStateSub;
 
 int _epoch = 0;
 
+const List<String> _tabRoutes = [
+  'dashboard',
+  'clinic-visits',
+  'individual-records',
+  'bmi-records',
+  'inventory',
+  'records-booklet',
+  'reports',
+  'user-accounts',
+];
+
 class _RoutePushGuard extends WidgetsBindingObserver {
   @override
   Future<bool> didPushRouteInformation(
-          RouteInformation routeInformation) async =>
+    RouteInformation routeInformation,
+  ) async =>
       true;
 }
 
@@ -26,43 +40,71 @@ void initTabHistory(void Function(int index) onTab) {
   _epoch += 1;
 
   _popStateSub ??= html.window.onPopState.listen(_handlePopState);
+
+  // Read the current URL when the dashboard initializes.
+  final tab = _readTab();
+  if (tab != null) {
+    onTab(tab);
+  } else {
+    html.window.history.replaceState(
+      {'tab': 0, 'epoch': _epoch},
+      '',
+      '#dashboard',
+    );
+    onTab(0);
+  }
 }
 
 void _handlePopState(html.PopStateEvent event) {
   final dashboard = _onTab;
   if (dashboard == null) return;
 
-  final Object? entry = _unwrap(event.state);
-  int tab = -1;
-  if (entry is Map && entry['epoch'] == _epoch && entry['tab'] is int) {
-    tab = entry['tab'] as int;
+  final tab = _readTab();
+
+  if (tab == null) {
+    html.window.history.replaceState(
+      {'tab': 0, 'epoch': _epoch},
+      '',
+      '#dashboard',
+    );
+    dashboard(0);
+    return;
   }
-  if (tab < 0) {
-    html.window.history.replaceState({'tab': 0, 'epoch': _epoch}, '', '#tab/0');
-    tab = 0;
-  }
+
   dashboard(tab);
 }
 
-Object? _unwrap(Object? state) {
-  if (state is Map && state.containsKey('state')) return state['state'];
-  return state;
-}
-
 int? _readTab() {
-  final match = RegExp(r'^#tab/(\d+)$').firstMatch(html.window.location.hash);
-  if (match == null) return null;
-  return int.tryParse(match.group(1) ?? '');
+  final hash = html.window.location.hash;
+
+  final index = _tabRoutes.indexOf(
+    hash.startsWith('#') ? hash.substring(1) : hash,
+  );
+
+  if (index < 0) return null;
+  return index;
 }
 
 void pushTabHistory(int index) {
+  if (index < 0 || index >= _tabRoutes.length) return;
+
   if (_readTab() == index) return;
-  html.window.history
-      .pushState({'tab': index, 'epoch': _epoch}, '', '#tab/$index');
+
+  final route = _tabRoutes[index];
+
+  html.window.history.pushState(
+    {'tab': index, 'epoch': _epoch},
+    '',
+    '#$route',
+  );
 }
 
 void resetTabHistory() {
-  html.window.history.replaceState(null, '', '#tab/0');
+  html.window.history.replaceState(
+    {'tab': 0, 'epoch': _epoch},
+    '',
+    '#dashboard',
+  );
 }
 
 void disposeTabHistory() {

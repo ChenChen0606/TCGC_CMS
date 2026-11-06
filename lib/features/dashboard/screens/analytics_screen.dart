@@ -19,7 +19,7 @@ const kTextMuted = AppColors.textSub;
 const kTextDark = AppColors.textDark;
 
 /// One clinic visit, with everything the Reports page needs
-/// (including the school year / semester and the full list of services).
+/// (including the academic year / semester and the full list of services).
 class _ReportVisit {
   final String visitId;
   final String personId;
@@ -36,7 +36,7 @@ class _ReportVisit {
   /// service name -> service code (used to match a service to its details).
   final Map<String, String> serviceCodes;
 
-  /// Every (school year, semester) the patient has an academic record in.
+  /// Every (academic year, semester) the patient has an academic record in.
   final List<({String year, String semester})> periods;
 
   const _ReportVisit({
@@ -110,7 +110,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
     'Daily',
     'Weekly',
     'Monthly',
-    'School Year',
+    'Academic Year',
     'Custom',
   ];
 
@@ -188,6 +188,9 @@ class _ReportsScreenState extends State<ReportsScreen> {
   final Set<String> _detailsRequested = {};
   final Set<String> _detailsDone = {};
   List<({String year, String semester})> _periodOptions = [];
+
+  /// Service names read from the `service_types` table.
+  List<String> _serviceTypeNames = [];
   bool _loadingVisits = true;
   String? _visitsError;
 
@@ -225,16 +228,44 @@ class _ReportsScreenState extends State<ReportsScreen> {
       _visitsError = null;
     });
     try {
-      // School years / semesters that exist in the database.
+      // Academic years / semesters that exist in the database.
       final periods = <({String year, String semester})>[];
       try {
         final rows = await supabaseClient
             .from('academic_periods')
-            .select('acad_year, semester');
+            .select('acad_year, semester')
+            .order('acad_year', ascending: false)
+            .range(0, 4999);
         for (final r in _asList(rows)) {
           final y = '${r['acad_year'] ?? ''}'.trim();
           final s = '${r['semester'] ?? ''}'.trim();
-          if (y.isNotEmpty) periods.add((year: y, semester: s));
+          if (y.isNotEmpty &&
+              !periods.any((e) => e.year == y && e.semester == s)) {
+            periods.add((year: y, semester: s));
+          }
+        }
+        debugPrint('academic_periods loaded: ${periods.length} rows');
+      } catch (e) {
+        debugPrint('academic_periods load failed: $e');
+      }
+
+      // Service names from the database (no Medical Certificate, and no
+      // separate BP Taking / Temperature Checking rows: they live under
+      // Vital Signs).
+      final svcNames = <String>[];
+      try {
+        final rows = await supabaseClient
+            .from('service_types')
+            .select('service_name, service_code')
+            .order('service_name');
+        for (final r in _asList(rows)) {
+          final n = '${r['service_name'] ?? ''}'.trim();
+          final c = '${r['service_code'] ?? ''}'.trim().toUpperCase();
+          if (n.isEmpty) continue;
+          if (c == 'MED_CERT' || _norm(n).contains('certificate')) continue;
+          if (c == 'BP_TAKING' || c == 'TEMP_CHECKING') continue;
+          if (_vitalSubs.contains(n)) continue;
+          svcNames.add(n);
         }
       } catch (_) {}
 
@@ -347,6 +378,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
       _detailsRequested.clear();
       _detailsDone.clear();
       setState(() {
+        _serviceTypeNames = svcNames;
         _visits = visits;
         _periodOptions = periods;
         _loadingVisits = false;
@@ -383,9 +415,9 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
   /// The label shown at the right of the Visit Records card.
   String _periodDateLabel() {
-    if (_selectedView == 'School Year') {
+    if (_selectedView == 'Academic Year') {
       return _selectedAcadYear == 'All'
-          ? 'All school years'
+          ? 'All academic years'
           : _selectedViewLabel;
     }
     final r = _rangeFor(_selectedView);
@@ -436,7 +468,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
   String _sessionLabel(_ReportVisit v) =>
       _isMorning(v) ? 'Morning (AM)' : 'Afternoon (PM)';
 
-  // ── School year / semester / service options ──────────────────────────
+  // ── Academic year / semester / service options ────────────────────────
 
   static int _semRank(String s) {
     final t = s.toLowerCase();
@@ -446,39 +478,71 @@ class _ReportsScreenState extends State<ReportsScreen> {
     return 9;
   }
 
+  /// Every academic year in the `academic_periods` table.
   List<String> get _availableAcadYears {
-    final years = <String>{};
-    for (final p in _periodOptions) {
-      if (p.year.isNotEmpty) years.add(p.year);
-    }
-    for (final v in _visits) {
-      for (final p in v.periods) {
-        years.add(p.year);
-      }
-    }
+    final years = <String>{
+      for (final p in _periodOptions)
+        if (p.year.isNotEmpty) p.year,
+      // Safety net: a year that a patient record points to is always listed.
+      for (final v in _visits)
+        for (final p in v.periods)
+          if (p.year.isNotEmpty) p.year,
+    };
     return years.toList()..sort((a, b) => b.compareTo(a));
   }
 
+  /// Every semester of the chosen academic year in `academic_periods`.
   List<String> get _availableSemesters {
-    final sems = <String>{};
-    for (final p in _periodOptions) {
-      if (p.year == _selectedAcadYear && p.semester.isNotEmpty) {
-        sems.add(p.semester);
-      }
-    }
-    for (final v in _visits) {
-      for (final p in v.periods) {
-        if (p.year == _selectedAcadYear && p.semester.isNotEmpty) {
-          sems.add(p.semester);
-        }
-      }
-    }
+    final sems = <String>{
+      for (final p in _periodOptions)
+        if (p.year == _selectedAcadYear && p.semester.isNotEmpty) p.semester,
+      for (final v in _visits)
+        for (final p in v.periods)
+          if (p.year == _selectedAcadYear && p.semester.isNotEmpty) p.semester,
+    };
     final list = sems.toList();
     list.sort((a, b) {
       final c = _semRank(a).compareTo(_semRank(b));
       return c != 0 ? c : a.compareTo(b);
     });
     return list;
+  }
+
+  /// Does any visit exist for this year (and semester)?
+  bool _hasRecords(String year, [String sem = 'All']) => _visits.any((v) =>
+      v.periods
+          .any((p) => p.year == year && (sem == 'All' || p.semester == sem)));
+
+  /// Message shown when the chosen academic year / semester has no visits.
+  String? _noRecordMessage() {
+    if (_selectedView != 'Academic Year' ||
+        _selectedAcadYear == 'All' ||
+        _loadingVisits) {
+      return null;
+    }
+    if (_visitsInRange().isNotEmpty) return null;
+    return 'No record yet for $_selectedViewLabel';
+  }
+
+  Widget _noRecordBanner(String msg) {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(top: 16),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: kBorder),
+      ),
+      child: Row(children: [
+        const Icon(Icons.info_outline_rounded, size: 18, color: kTextMuted),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(msg,
+              style: const TextStyle(fontSize: 13, color: kTextMuted)),
+        ),
+      ]),
+    );
   }
 
   List<String> get _availableServices {
@@ -489,11 +553,18 @@ class _ReportsScreenState extends State<ReportsScreen> {
     return s.toList()..sort();
   }
 
-  /// Service dropdown: every service, with the vital-sign sub-services
-  /// listed right under "Vital signs".
+  /// Service dropdown: every service from `service_types` (without Medical
+  /// Certificate), with the vital-sign sub-services listed right under
+  /// "Vital Signs".
   List<String> get _serviceOptions {
+    final base = _serviceTypeNames.isNotEmpty
+        ? _serviceTypeNames
+        : _availableServices
+            .where((s) =>
+                !_norm(s).contains('certificate') && !_vitalSubs.contains(s))
+            .toList(); // fallback if the table could not be read
     final out = <String>['All'];
-    for (final s in _availableServices) {
+    for (final s in base) {
       out.add(s);
       if (_isVitalName(s)) {
         for (final sub in _vitalSubs) {
@@ -630,8 +701,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
         return _insightsCustomRange != null
             ? '${_fmtDate(_insightsCustomRange!.start)} - ${_fmtDate(_insightsCustomRange!.end)}'
             : 'Custom range - pick dates';
-      case 'School Year':
-        if (_selectedAcadYear == 'All') return 'all school years';
+      case 'Academic Year':
+        if (_selectedAcadYear == 'All') return 'all academic years';
         var base = 'A.Y. $_selectedAcadYear';
         if (_selectedSemester != 'All') base += ' - $_semesterLabel';
         return base;
@@ -641,7 +712,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
   }
 
   bool _inPeriod(_ReportVisit v) {
-    if (_selectedView == 'School Year') {
+    if (_selectedView == 'Academic Year') {
       if (_selectedAcadYear == 'All') return true;
       return v.periods.any((p) =>
           p.year == _selectedAcadYear &&
@@ -731,7 +802,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
   }
 
   /// Visits in the previous period; null when a comparison makes no sense
-  /// (school year view or an unpicked custom range).
+  /// (academic year view or an unpicked custom range).
   int? get _previousTotalVisits {
     final range = _previousRangeFor(_selectedView);
     if (range == null) return null;
@@ -986,6 +1057,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: _metricWidgets(metrics, false));
               }),
+              if (_noRecordMessage() != null)
+                _noRecordBanner(_noRecordMessage()!),
             ],
           ),
         ),
@@ -995,7 +1068,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
     );
   }
 
-  // ── Filters: view selector + school year/semester ─────────────────────
+  // ── Filters: view selector + academic year/semester ───────────────────
 
   Widget _buildFilterBar({required bool alignEnd}) {
     return Wrap(
@@ -1006,25 +1079,28 @@ class _ReportsScreenState extends State<ReportsScreen> {
       crossAxisAlignment: WrapCrossAlignment.center,
       children: [
         _buildViewSelector(),
-        if (_selectedView == 'School Year') ...[
+        if (_selectedView == 'Academic Year') ...[
           _filterDropdown(
             icon: Icons.event_note_rounded,
             value: _selectedAcadYear,
             options: ['All', ..._availableAcadYears],
             allLabel: 'All Years',
+            labelOf: (o) => _hasRecords(o) ? o : '$o · no record',
             onChanged: (v) => setState(() {
               _selectedAcadYear = v;
               _selectedSemester = 'All';
               _page = 0;
             }),
           ),
-          // Semester only shows once a specific school year is picked.
+          // Semester only shows once a specific academic year is picked.
           if (_selectedAcadYear != 'All')
             _filterDropdown(
               icon: Icons.calendar_view_month_rounded,
               value: _selectedSemester,
               options: ['All', ..._availableSemesters],
               allLabel: 'All Semesters',
+              labelOf: (o) =>
+                  _hasRecords(_selectedAcadYear, o) ? o : '$o · no record',
               onChanged: (v) => setState(() {
                 _selectedSemester = v;
                 _page = 0;
@@ -1331,8 +1407,9 @@ class _ReportsScreenState extends State<ReportsScreen> {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
           decoration: BoxDecoration(
-            color:
-                selected ? color.withValues(alpha: 0.08) : const Color(0xFFF8FAFC),
+            color: selected
+                ? color.withValues(alpha: 0.08)
+                : const Color(0xFFF8FAFC),
             borderRadius: BorderRadius.circular(12),
             border: Border.all(color: selected ? color : kBorder),
           ),
@@ -1622,9 +1699,10 @@ class _ReportsScreenState extends State<ReportsScreen> {
               ),
               child: Center(
                 child: Text(
-                    pending > 0
-                        ? 'Loading records…'
-                        : 'No records match the current filters.',
+                    _noRecordMessage() ??
+                        (pending > 0
+                            ? 'Loading records…'
+                            : 'No records match the current filters.'),
                     style: const TextStyle(color: kTextMuted, fontSize: 13)),
               ),
             )
@@ -1950,7 +2028,9 @@ class _ReportsScreenState extends State<ReportsScreen> {
   int _cardCount(_ReportVisit v) {
     final c = _details[v.visitId];
     if (c != null && c.drafts.isNotEmpty) return c.drafts.length;
-    return _detailsDone.contains(v.visitId) || c != null ? v.services.length : 0;
+    return _detailsDone.contains(v.visitId) || c != null
+        ? v.services.length
+        : 0;
   }
 
   Widget _sessionBanner(_ReportVisit v) {
@@ -2160,7 +2240,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
                               _headerPill(
                                   v.personType, Icons.person_outline_rounded),
                             if (v.affiliation.isNotEmpty)
-                              _headerPill(v.affiliation, Icons.apartment_rounded),
+                              _headerPill(
+                                  v.affiliation, Icons.apartment_rounded),
                           ],
                         ),
                         if (date.isNotEmpty || time.isNotEmpty) ...[

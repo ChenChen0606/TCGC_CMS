@@ -44,7 +44,10 @@ List<SummarySection> serviceSummary(ServiceDraft draft, VisitVitals vitals,
 
       if (_foldedOtherKeys(draft).contains(f.key)) continue;
       if (hideRestricted && restrictedKeys.contains(f.key)) continue;
-      final value = summaryValue(draft, f);
+            var value = summaryValue(draft, f);
+      if (f.kind == ServiceFieldKind.readOnly) {
+        value = _autoSummary(f.key, vitals) ?? value;
+      }
       if (value.trim().isEmpty) continue;
       rows.add(SummaryRow(f.label, value));
     }
@@ -99,7 +102,8 @@ List<SummarySection> serviceSummary(ServiceDraft draft, VisitVitals vitals,
     ]));
   }
 
-  final wantsVitals = draft.spec.slides.any((s) => s.fields.any((f) =>
+    final wantsVitals = draft.serviceId != 'bpi' &&
+      draft.spec.slides.any((s) => s.fields.any((f) =>
       f.kind == ServiceFieldKind.sharedVitals ||
       f.kind == ServiceFieldKind.vitalsCard ||
       f.vital != null));
@@ -189,3 +193,13 @@ Set<String> _foldedOtherKeys(ServiceDraft draft) {
   final lists = folded[draft.serviceId] ?? const <String>[];
   return {for (final k in lists) '${k}_other'};
 }
+String? _autoSummary(String key, VisitVitals v) => switch (key) {
+      'bmi' => v.bmi?.toStringAsFixed(1),
+      'bmi_class' => v.bmiReading?.category,
+      'bp_assessment' => v.bloodPressure?.category,
+      'temp_assessment' => v.tempReading?.category,
+      'pulse_assessment' => v.heartRateReading?.category,
+      'resp_assessment' => v.respRateReading?.category,
+      'spo2_assessment' => v.o2Reading?.category,
+      _ => null,
+    };

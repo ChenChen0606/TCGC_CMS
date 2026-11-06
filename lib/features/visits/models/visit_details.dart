@@ -783,6 +783,11 @@ class VisitDetailsController extends ChangeNotifier {
       vitals.heightCm = visitVitals.heightCm;
       vitals.weightKg = visitVitals.weightKg;
       vitals.interpretations.addAll(visitVitals.interpretations);
+      if (visitVitals.birthDate != null) {
+        vitals.sex = visitVitals.sex;
+        vitals.birthDate = visitVitals.birthDate;
+        vitals.asOf = visitVitals.asOf;
+      }
     }
     _recaptureBands();
     final first = _firstIncomplete() ?? (active?.serviceId);

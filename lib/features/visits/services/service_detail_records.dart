@@ -216,15 +216,15 @@ Map<String, dynamic>? buildServiceRecord({
   String? recordedBy,
 }) {
   switch (dartServiceId) {
-    case 'bpi':
-      final bmiClass = _choice(d, 'bmi_class');
+        case 'bpi':
+      final bmiValue = vitals.bmi;
       return {
         'height_cm': _vitalNum(vitals.heightCm),
         'weight_kg': _vitalNum(vitals.weightKg),
-        'bmi': _choice(d, 'bmi') ??
-            vitals.bmiReading?.display ??
-            _vitalNum(vitals.bmi),
-        'classification': bmiClass ?? vitals.bmiReading?.category,
+        'bmi': bmiValue == null
+            ? null
+            : double.parse(bmiValue.toStringAsFixed(1)),
+        'classification': vitals.bmiReading?.category,
         'notes': _textOrNull(d, 'notes'),
       };
     case 'wound_dressing':
@@ -422,7 +422,7 @@ Map<String, dynamic>? buildServiceRecord({
         'needs_referral': needsReferral,
         'referral_reasons': reasons.isEmpty ? null : jsonEncode(reasons),
       };
-        case 'vital_signs':
+    case 'vital_signs':
       // Only ticked vitals are saved; unticked ones go in as NULL.
       // Old visits (nothing ticked) keep every value they have.
       final vsPicked = d.chosen(kVitalsSelectedKey).toSet();
@@ -440,7 +440,7 @@ Map<String, dynamic>? buildServiceRecord({
       final vsPulseClass = VitalClassifier.classifyPulse(vsPulse);
       final vsRespClass = VitalClassifier.classifyResp(vsResp);
       final vsSpo2Class = VitalClassifier.classifySpo2(vsSpo2);
-       final vsAnyVital = vsSys != null ||
+      final vsAnyVital = vsSys != null ||
           vsDia != null ||
           vsTemp != null ||
           vsPulse != null ||
@@ -451,8 +451,7 @@ Map<String, dynamic>? buildServiceRecord({
         'diastolic': _vitalNum(vsDia),
         'pulse_rate': _vitalNum(vsPulse),
         'temperature': _vitalNum(vsTemp),
-        'temp_method':
-            vsOn('Temperature') ? _textOrNull(d, 'method') : null,
+        'temp_method': vsOn('Temperature') ? _textOrNull(d, 'method') : null,
         'respiratory_rate': _vitalNum(vsResp),
         'spo2': _vitalNum(vsSpo2),
         'arm': vsOn('Blood Pressure') ? _listOrNull(d, 'arm_used') : null,
@@ -467,12 +466,11 @@ Map<String, dynamic>? buildServiceRecord({
         'respiratory_band': vsRespClass?.band.name,
         'spo2_classification': vsSpo2Class?.label,
         'spo2_band': vsSpo2Class?.band.name,
-        'measured_at':
-            vsAnyVital ? vitals.measuredAt?.toIso8601String() : null,
+        'measured_at': vsAnyVital ? vitals.measuredAt?.toIso8601String() : null,
         if (recordedBy != null && recordedBy.isNotEmpty)
           'recorded_by': recordedBy,
         'action_taken': _vitalActionsOrNull(d),
-       'referral_reason': _textOrNull(d, 'referral_reason'),
+        'referral_reason': _textOrNull(d, 'referral_reason'),
         'referred_to': _textOrNull(d, 'referred_to'),
         'assessment': _textOrNull(d, 'assessment'),
       };
@@ -481,6 +479,10 @@ Map<String, dynamic>? buildServiceRecord({
   }
 }
 
+/// Loads the saved answers of many visit services.
+///
+/// The eight detail tables (and the two first-aid child tables) are now
+/// queried at the SAME TIME instead of one after the other.
 Future<Map<String, Map<String, dynamic>>> loadServiceRecords(
     List<String> visitServiceIds) async {
   final out = <String, Map<String, dynamic>>{};
@@ -496,18 +498,27 @@ Future<Map<String, Map<String, dynamic>>> loadServiceRecords(
     'medication_services',
     'vital_signs',
   ];
-  for (final table in tables) {
+
+  final results = await Future.wait(tables.map((table) async {
     try {
       final rows = await supabaseClient
           .from(table)
           .select()
           .inFilter('visit_service_id', visitServiceIds);
-      for (final r in rows) {
-        final id = '${r['visit_service_id'] ?? ''}';
-        if (id.isEmpty) continue;
-        out.putIfAbsent(id, () => {}).addAll(r.cast<String, dynamic>());
-      }
-    } catch (_) {}
+      return [for (final r in rows) Map<String, dynamic>.from(r as Map)];
+    } catch (_) {
+      return <Map<String, dynamic>>[];
+    }
+  }));
+
+  // Merge in the same table order as before so overlapping column names
+  // (e.g. "notes") resolve exactly as they used to.
+  for (final rows in results) {
+    for (final r in rows) {
+      final id = '${r['visit_service_id'] ?? ''}';
+      if (id.isEmpty) continue;
+      out.putIfAbsent(id, () => {}).addAll(r);
+    }
   }
 
   final firstAidParents = <String, String>{};
@@ -516,30 +527,39 @@ Future<Map<String, Map<String, dynamic>>> loadServiceRecords(
     if (pid.isNotEmpty) firstAidParents[pid] = e.key;
   }
   if (firstAidParents.isNotEmpty) {
-    try {
-      final conditions = await supabaseClient
-          .from('first_aid_conditions')
-          .select('first_aid_id, condition')
-          .inFilter('first_aid_id', firstAidParents.keys.toList());
-      for (final c in conditions) {
-        final kid = firstAidParents['${c['first_aid_id'] ?? ''}'];
-        if (kid == null) continue;
-        out[kid]!.putIfAbsent('_conditions', () => []).add('${c['condition']}');
-      }
-    } catch (_) {}
-    try {
-      final treatments = await supabaseClient
-          .from('first_aid_treatments')
-          .select('first_aid_id, treatment_type')
-          .inFilter('first_aid_id', firstAidParents.keys.toList());
-      for (final t in treatments) {
-        final kid = firstAidParents['${t['first_aid_id'] ?? ''}'];
-        if (kid == null) continue;
-        out[kid]!
-            .putIfAbsent('_treatments', () => [])
-            .add('${t['treatment_type']}');
-      }
-    } catch (_) {}
+    final parentIds = firstAidParents.keys.toList();
+    await Future.wait([
+      () async {
+        try {
+          final conditions = await supabaseClient
+              .from('first_aid_conditions')
+              .select('first_aid_id, condition')
+              .inFilter('first_aid_id', parentIds);
+          for (final c in conditions) {
+            final kid = firstAidParents['${c['first_aid_id'] ?? ''}'];
+            if (kid == null) continue;
+            out[kid]!
+                .putIfAbsent('_conditions', () => [])
+                .add('${c['condition']}');
+          }
+        } catch (_) {}
+      }(),
+      () async {
+        try {
+          final treatments = await supabaseClient
+              .from('first_aid_treatments')
+              .select('first_aid_id, treatment_type')
+              .inFilter('first_aid_id', parentIds);
+          for (final t in treatments) {
+            final kid = firstAidParents['${t['first_aid_id'] ?? ''}'];
+            if (kid == null) continue;
+            out[kid]!
+                .putIfAbsent('_treatments', () => [])
+                .add('${t['treatment_type']}');
+          }
+        } catch (_) {}
+      }(),
+    ]);
   }
 
   return out;
@@ -552,9 +572,8 @@ void applyServiceRecordTo({
 }) {
   switch (dartServiceId) {
     case 'bpi':
-
-      _setStr(data, 'bmi', row['bmi']);
-      _setStr(data, 'bmi_class', row['classification']);
+      _setNum(data, 'height_cm', row['height_cm']);
+      _setNum(data, 'weight_kg', row['weight_kg']);
       _setStr(data, 'notes', row['notes']);
     case 'wound_dressing':
       _readChoiceWithOther(
@@ -800,7 +819,7 @@ void applyServiceRecordTo({
       _setStr(data, 'method', row['temp_method']);
       _setNum(data, 'resp_rate', row['respiratory_rate']);
       _setNum(data, 'o2_sat', row['spo2']);
-            _setNum(data, 'height_cm', row['height_cm']);
+      _setNum(data, 'height_cm', row['height_cm']);
       _setNum(data, 'weight_kg', row['weight_kg']);
 
       // Rebuild the tick-boxes from whichever columns have a value.
@@ -810,7 +829,6 @@ void applyServiceRecordTo({
         if (row['temperature'] != null) 'Temperature',
         if (row['pulse_rate'] != null) 'Pulse',
         if (row['respiratory_rate'] != null) 'Respiratory Rate',
-        
         if (row['spo2'] != null) 'O₂ Saturation',
       ];
       if (vsTicked.isNotEmpty) {
@@ -824,8 +842,7 @@ void applyServiceRecordTo({
       _applyVitalActions(data, row['action_taken']);
       _setStr(data, 'referral_reason', row['referral_reason']);
       _setStr(data, 'assessment', row['assessment']);
-        _setStr(data, 'referred_to', row['referred_to']);
-      
+      _setStr(data, 'referred_to', row['referred_to']);
   }
 }
 

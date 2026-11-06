@@ -178,6 +178,11 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
       child: ListenableBuilder(
         listenable: _c,
         builder: (context, _) {
+           _c.vitals.setSubject(
+            sex: _v.sex,
+            birthDate: DateTime.tryParse(_v.birthDate),
+            asOf: widget.visitStamp ?? DateTime.now(),
+          );
           final draft = _c.active;
 
           if (_showAllErrorsFor != draft?.serviceId) {
@@ -1912,7 +1917,9 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
         final bmi = _c.vitals.bmi;
         return bmi == null ? '—' : bmi.toStringAsFixed(1);
       case 'bmi_class':
-        return _c.vitals.bmiReading?.category ?? '—';
+                return _c.vitals.bmiReading?.category ??
+            _c.vitals.bmiBlockReason ??
+            '—';
       case 'temp_assessment':
         return _c.vitals.tempReading?.category ?? '—';
       case 'bp_assessment':
@@ -2092,6 +2099,13 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
 
   bool _readyToLeave(ServiceDraft? d) {
     if (d == null) return true;
+        if (d.serviceId == 'bpi') {
+      final why = _c.vitals.bmiBlockReason;
+      if (why != null) {
+        _toast(why);
+        return false;
+      }
+    }
     if (_firstAidVitalsMissing()) {
       _toast('Please take vital signs first. Tap the button.');
       return false;

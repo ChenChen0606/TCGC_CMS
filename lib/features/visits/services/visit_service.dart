@@ -134,7 +134,7 @@ class Visit {
       "periodId": academicPeriodId ?? '',
       "visitYear": ReferenceCatalog.periodById(academicPeriodId)?.acadYear ?? '',
       "visitSemester":
-          ReferenceCatalog.periodById(academicPeriodId)?.semester ?? '',      
+          ReferenceCatalog.periodById(academicPeriodId)?.semester ?? '',
       "createdBy": by(recordedBy),
       "createdAt": ts(created),
       "updatedBy": by(recordedBy),
@@ -192,25 +192,75 @@ class VisitService {
         .toList();
   }
 
-  static Future<List<Map<String, String>>> fetchAllBookletRecords() async {
-    Map<String, String> userNames = const {};
+  // ---------------------------------------------------------------------
+  // Booklet records (fast path)
+  // ---------------------------------------------------------------------
+
+  static Map<String, String>? _namesCache;
+  static DateTime? _namesAt;
+
+  /// User names change rarely, so they are cached for a few minutes instead
+  /// of being downloaded on every reload.
+  static Future<Map<String, String>> _userNames() async {
+    final cached = _namesCache;
+    final at = _namesAt;
+    if (cached != null &&
+        at != null &&
+        DateTime.now().difference(at).inMinutes < 10) {
+      return cached;
+    }
     try {
-      userNames = await PatientService.fetchUserNames();
-    } catch (_) {}
-    final rows = await supabaseClient
-        .from('clinic_visits')
-        .select()
-        .order('created_at', ascending: false);
+      final m = await PatientService.fetchUserNames();
+      _namesCache = m;
+      _namesAt = DateTime.now();
+      return m;
+    } catch (_) {
+      return cached ?? const <String, String>{};
+    }
+  }
 
-    final outByVisit = await _completedAtByVisit();
+  static const int _pageSize = 1000;
 
-    return rows.map((r) {
-      final map = Map<String, dynamic>.from(r);
-      final visitId = '${map['visit_id'] ?? map['id'] ?? ''}';
+  /// Every visit, with the completed_at of its services joined in one query
+  /// (this replaces the separate scan of clinic_visit_services) and paged so
+  /// Supabase's 1000-row cap does not cut the list short.
+  static Future<List<Map<String, dynamic>>> _fetchAllVisitRows() async {
+    final all = <Map<String, dynamic>>[];
+    for (var from = 0;; from += _pageSize) {
+      final rows = await supabaseClient
+          .from('clinic_visits')
+          .select('*, clinic_visit_services!left(completed_at)')
+          .order('created_at', ascending: false)
+          .order('visit_id')
+          .range(from, from + _pageSize - 1);
+      all.addAll(rows.map((r) => Map<String, dynamic>.from(r)));
+      if (rows.length < _pageSize) break;
+    }
+    return all;
+  }
+
+  static Future<List<Map<String, String>>> fetchAllBookletRecords() async {
+    final namesF = _userNames();
+    final rowsF = _fetchAllVisitRows();
+    final userNames = await namesF;
+    final rows = await rowsF;
+
+    return rows.map((map) {
       final visit = Visit.fromSupabase(map);
+
       // The saved Time Out wins; old rows without one fall back to the
       // latest completed service.
-      final out = visit.outTime ?? outByVisit[visitId];
+      DateTime? out = visit.outTime;
+      if (out == null) {
+        for (final s in _mapList(map['clinic_visit_services'])) {
+          final raw = s['completed_at'];
+          final ts = raw is DateTime
+              ? raw
+              : (raw is String ? DateTime.tryParse(raw) : null);
+          if (ts != null && (out == null || ts.isAfter(out))) out = ts;
+        }
+      }
+
       return Visit(
         id: visit.id,
         patientId: visit.patientId,
@@ -232,28 +282,6 @@ class VisitService {
         academicPeriodId: visit.academicPeriodId,
       ).toBookletMap(userNames: userNames);
     }).toList();
-  }
-
-  static Future<Map<String, DateTime>> _completedAtByVisit() async {
-    final out = <String, DateTime>{};
-    try {
-      final rows = await supabaseClient
-          .from('clinic_visit_services')
-          .select('visit_id, completed_at')
-          .not('completed_at', 'is', null);
-      for (final r in rows) {
-        final visitId = '${r['visit_id'] ?? ''}';
-        if (visitId.isEmpty) continue;
-        final raw = r['completed_at'];
-        final ts = raw is DateTime
-            ? raw
-            : (raw is String ? DateTime.tryParse(raw) : null);
-        if (ts == null) continue;
-        final existing = out[visitId];
-        if (existing == null || ts.isAfter(existing)) out[visitId] = ts;
-      }
-    } catch (_) {}
-    return out;
   }
 
   static Future<Visit> create({
@@ -300,8 +328,7 @@ class VisitService {
           'person_id': patientId,
           'visit_date': DateFormat("yyyy-MM-dd").format(day),
           'visit_time': time24,
-          if (timeOut != null)
-            'time_out': timeOut.toUtc().toIso8601String(),
+          if (timeOut != null) 'time_out': timeOut.toUtc().toIso8601String(),
           'reason_for_visit': reason.isNotEmpty ? reason : complaint,
           'status': 'Completed',
           'created_by': createdBy,
@@ -316,7 +343,7 @@ class VisitService {
     return persisted;
   }
 
-    static Future<void> update(
+  static Future<void> update(
     dynamic id, {
     required String complaint,
     String? academicPeriodId,

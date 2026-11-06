@@ -314,10 +314,12 @@ const double _sheetRow = 68;
 const double _sheetBodySize = 36;
 const double _sheetRuleTop = 49;
 const double _sheetRule = 2;
+/// Space under the footer bar. Use 5 for tighter, 12 for a bit more room.
+const double _sheetFooterGap = 12;
 
 const double _sheetDesignPage = 792 / (612 / 1545);
 final double _sheetDesignFoot =
-    (138 * (612 / 1545) + 792 * 0.04) / (612 / 1545);
+    (138 * (612 / 1545) + _sheetFooterGap) / (612 / 1545);
 
 double _sheetHeaderHeight(DocMetrics m) => m.pageWidth * 300 / 1545;
 
@@ -327,7 +329,7 @@ double _sheetFooterHeight(DocMetrics m) {
   final unit = m.pageWidth / 1545;
   return m.isLandscape
       ? m.footerH
-      : (overhang + art) * unit + m.pageHeight * 0.04;
+      : (overhang + art) * unit + _sheetFooterGap;
 }
 
 const PdfColor _sheetGreen = PdfColor.fromInt(0xFF0E6B47);
