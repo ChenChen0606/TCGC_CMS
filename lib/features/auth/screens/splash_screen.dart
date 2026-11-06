@@ -46,8 +46,8 @@ class _SplashScreenState extends State<SplashScreen> {
       // The link did not produce a session. Show an error on the login page.
       RecoveryState.pending.value = false;
       RecoveryState.linkError =
-          'This reset link could not be verified. Please request a new one '
-          'in the same browser.';
+      'This reset link could not be verified. Please request a new one.'
+      '${RecoveryState.verifyError != null ? '\n(${RecoveryState.verifyError})' : ''}';
     }
 
     Navigator.pushReplacement(

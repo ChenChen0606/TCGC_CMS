@@ -6,10 +6,9 @@ import 'package:clinicmanagementsystem/core/config/supabase_config.dart';
 class RecoveryState {
   static final ValueNotifier<bool> pending = ValueNotifier(false);
   static String? linkError;
+  static String? verifyError; // real reason if the link failed
   static bool _started = false;
 
-  /// Call right AFTER initSupabase(), passing the URI captured
-  /// at the very top of main() (before Supabase rewrites the URL).
   static void start(Uri launchUri) {
     if (_started) return;
     _started = true;
@@ -31,8 +30,9 @@ class RecoveryState {
     final hasError = full.contains('error_code=') ||
         full.contains('error=access_denied') ||
         full.contains('otp_expired');
-    final isRecovery =
-        full.contains('type=recovery') || RegExp(r'[?&#]code=').hasMatch(full);
+    final isRecovery = full.contains('type=recovery') ||
+        full.contains('token_hash=') ||
+        RegExp(r'[?&#]code=').hasMatch(full);
 
     if (hasError) {
       linkError = 'This reset link is invalid or has expired. '

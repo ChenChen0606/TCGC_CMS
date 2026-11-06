@@ -1,5 +1,6 @@
 import 'package:clinicmanagementsystem/features/auth/recovery_state.dart';
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:clinicmanagementsystem/app/app.dart';
 import 'package:flutter/services.dart';
 import 'package:clinicmanagementsystem/core/theme/app_colors.dart';
@@ -14,13 +15,30 @@ Future<void> main() async {
   final launchUri = Uri.base;
   debugPrint('MAIN launch uri: $launchUri');
 
-  // Supabase must read the code/token BEFORE the history guard runs.
   await initSupabase();
 
-  // Fallback: code present but Supabase did not create a session.
+  // NEW: verify the token_hash link (works in any browser, no PKCE needed).
+  final tokenHash = launchUri.queryParameters['token_hash'];
+  final linkType = launchUri.queryParameters['type'];
+  if (tokenHash != null && linkType == 'recovery') {
+    try {
+      await supabaseClient.auth.verifyOTP(
+        tokenHash: tokenHash,
+        type: OtpType.recovery,
+      );
+      debugPrint('RECOVERY: token_hash verified OK');
+    } on AuthException catch (e) {
+      debugPrint('RECOVERY: verifyOTP failed: ${e.message}');
+      RecoveryState.verifyError = e.message;
+    } catch (e) {
+      debugPrint('RECOVERY: verifyOTP failed: $e');
+      RecoveryState.verifyError = '$e';
+    }
+  }
+
+  // Old ?code= links (fallback)
   final code = launchUri.queryParameters['code'];
   if (code != null) {
-    // Let Supabase's own auto-exchange finish first (a code is single-use).
     for (var i = 0;
         i < 8 && supabaseClient.auth.currentSession == null;
         i++) {
@@ -31,6 +49,7 @@ Future<void> main() async {
         await supabaseClient.auth.exchangeCodeForSession(code);
       } catch (e) {
         debugPrint('RECOVERY: manual code exchange failed: $e');
+        RecoveryState.verifyError = '$e';
       }
     }
   }
