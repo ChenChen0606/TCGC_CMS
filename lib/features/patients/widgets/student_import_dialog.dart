@@ -472,7 +472,7 @@ class _StudentImportDialogState extends State<StudentImportDialog> {
                       fontWeight: FontWeight.w800,
                       color: kTextMain)),
               const Spacer(),
-              Text('${p.total} row(s)',
+             Text(p.total > 100 ? 'Showing first 100 of ${p.total} row(s)' : '${p.total} row(s)',
                   style: const TextStyle(fontSize: 12.5, color: kTextSub)),
             ]),
             const SizedBox(height: 10),
@@ -556,6 +556,13 @@ class _StudentImportDialogState extends State<StudentImportDialog> {
     return 'Why ${p.invalid} row(s) are Invalid:\n${lines.join('\n')}';
   }
   Widget _analysisTable(StudentImportPlan p) {
+      final sorted = [...p.rows]..sort((a, b) {
+        final ai = a.status == kImportInvalid ? 0 : 1;
+        final bi = b.status == kImportInvalid ? 0 : 1;
+        return ai != bi ? ai - bi : a.rowNumber.compareTo(b.rowNumber);
+      });
+    const showMax = 100;
+    final shown = sorted.take(showMax).toList();  
     return Container(
       decoration: BoxDecoration(
         color: kCard,
@@ -596,13 +603,7 @@ class _StudentImportDialogState extends State<StudentImportDialog> {
                   DataColumn(label: Text('NOTE')),
                 ],
                 rows: [
-                  for (final r in ([...p.rows]..sort((a, b) {
-                    final ai = a.status == kImportInvalid ? 0 : 1;
-                    final bi = b.status == kImportInvalid ? 0 : 1;
-                    return ai != bi
-                        ? ai - bi
-                        : a.rowNumber.compareTo(b.rowNumber);
-                  })))
+                  for (final r in shown)
                     DataRow(cells: [
                       DataCell(Text(r.record.id.isEmpty ? '—' : r.record.id,
                           style: const TextStyle(

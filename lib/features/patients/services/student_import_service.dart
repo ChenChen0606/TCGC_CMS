@@ -626,12 +626,15 @@ class StudentImportService {
     final ids = firstRow.keys.toList();
 
     final people = <String, Map<String, dynamic>>{};
-    for (final chunk in _chunks(ids)) {
-      final rows = await supabaseClient
-          .from(_people)
-          .select('person_id, person_type, fn, mn, ln, suffix, sex, '
-              'date_of_birth, contact_number, email, address')
-          .inFilter('person_id', chunk);
+    final chunkResults = await Future.wait([
+      for (final chunk in _chunks(ids))
+        supabaseClient
+            .from(_people)
+            .select('person_id, person_type, fn, mn, ln, suffix, sex, '
+                'date_of_birth, contact_number, email, address')
+            .inFilter('person_id', chunk),
+    ]);
+    for (final rows in chunkResults) {
       for (final r in rows) {
         final m = Map<String, dynamic>.from(r);
         people['${m['person_id']}'] = m;

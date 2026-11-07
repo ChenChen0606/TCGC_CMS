@@ -2535,30 +2535,31 @@ class _IndividualRecordScreenState extends State<IndividualRecordScreen>
                       ),
                     ),
                   ),
-                                 Padding(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    child:
-                        Row(mainAxisAlignment: MainAxisAlignment.end, children: [
-                      Text(
-                          '${_page * _pageSize + 1}–'
-                          '${((_page + 1) * _pageSize).clamp(0, list.length)} '
-                          'of ${list.length}',
-                          style:
-                              const TextStyle(fontSize: 13, color: kTextSub)),
-                      IconButton(
-                        onPressed:
-                            _page > 0 ? () => setState(() => _page--) : null,
-                        icon: const Icon(Icons.chevron_left_rounded),
-                      ),
-                      IconButton(
-                        onPressed: (_page + 1) * _pageSize < list.length
-                            ? () => setState(() => _page++)
-                            : null,
-                        icon: const Icon(Icons.chevron_right_rounded),
-                      ),
-                    ]),
-                  ), ]),
+          Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Row(mainAxisAlignment: MainAxisAlignment.start, children: [
+                
+                IconButton(
+                  tooltip: 'Previous',
+                  onPressed: _page > 0 ? () => setState(() => _page--) : null,
+                  icon: const Icon(Icons.chevron_left_rounded),
+                ),
+                Text(
+                    '${_page * _pageSize + 1}–'
+                    '${((_page + 1) * _pageSize).clamp(0, list.length)} '
+                    'of ${list.length}',
+                    style: const TextStyle(fontSize: 13, color: kTextSub)),
+                IconButton(
+                  tooltip: 'Next',
+                  onPressed: (_page + 1) * _pageSize < list.length
+                      ? () => setState(() => _page++)
+                      : null,
+                  icon: const Icon(Icons.chevron_right_rounded),
+                ),
+                
+              ]),
+            ),
+                ]),
     );
   }
 
