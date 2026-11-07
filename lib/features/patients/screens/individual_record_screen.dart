@@ -1027,7 +1027,7 @@ class _IndividualRecordScreenState extends State<IndividualRecordScreen>
                 child: Row(children: [
                   Icon(Icons.layers_outlined, size: 17, color: kTextSub),
                   SizedBox(width: 8),
-                  Text('Show all (including inactive)'),
+                  Text('Show all'),
                 ]),
               ),
             ],

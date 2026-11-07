@@ -40,7 +40,7 @@ dependencies:
   pdf: ^3.10.7
   supabase_flutter: ^2.15.4
   file_selector: ^1.1.0
-  excel: ^4.0.6
+  excel_plus: ^2.12.0
 
 dev_dependencies:
   flutter_test:

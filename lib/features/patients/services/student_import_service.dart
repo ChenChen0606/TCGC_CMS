@@ -7,7 +7,7 @@ import 'package:clinicmanagementsystem/core/services/data_tracker.dart';
 import 'package:clinicmanagementsystem/features/patients/services/individual_record_service.dart';
 import 'package:clinicmanagementsystem/core/services/reference_data_service.dart';
 import 'package:clinicmanagementsystem/core/config/supabase_config.dart';
-import 'package:excel/excel.dart' as xl;
+import 'package:excel_plus/excel_plus.dart' as xl;
 import 'package:flutter/foundation.dart';
 import 'package:intl/intl.dart';
 
@@ -192,20 +192,20 @@ class StudentImportService {
 
   static List<List<String>> readTable(Uint8List bytes, String fileName) {
     final lower = fileName.toLowerCase();
-    if (lower.endsWith('.xlsx')) return _readXlsx(bytes);
+
+    // Real Excel files start with "PK" (.xlsx) or D0 CF (.xls).
+    final isExcelBinary = bytes.length > 1 &&
+        ((bytes[0] == 0x50 && bytes[1] == 0x4B) ||
+            (bytes[0] == 0xD0 && bytes[1] == 0xCF));
+
     if (lower.endsWith('.csv') || lower.endsWith('.txt')) {
       return _readCsv(bytes);
     }
-    if (lower.endsWith('.xls')) {
-      throw const ImportFileException(
-          'Old .xls files cannot be read. Open the file in Excel, choose '
-          'Save As, and pick "Excel Workbook (.xlsx)" or "CSV".');
+    if (lower.endsWith('.xlsx') || lower.endsWith('.xls')) {
+      // Some ".xls" files from schools are really text/CSV in disguise.
+      return isExcelBinary ? _readXlsx(bytes) : _readCsv(bytes);
     }
-
-    if (bytes.length > 1 && bytes[0] == 0x50 && bytes[1] == 0x4B) {
-      return _readXlsx(bytes);
-    }
-    return _readCsv(bytes);
+    return isExcelBinary ? _readXlsx(bytes) : _readCsv(bytes);
   }
 
   static List<List<String>> _readXlsx(Uint8List bytes) {

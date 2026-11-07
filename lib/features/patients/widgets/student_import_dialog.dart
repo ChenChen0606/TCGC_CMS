@@ -40,7 +40,7 @@ class _StudentImportDialogState extends State<StudentImportDialog> {
     try {
       const typeGroup = XTypeGroup(
         label: 'Spreadsheet',
-        extensions: ['xlsx', 'csv'],
+        extensions: ['xlsx', 'xls', 'csv'],
         uniformTypeIdentifiers: [
           'org.openxmlformats.spreadsheetml.sheet',
           'public.comma-separated-values-text',
@@ -393,7 +393,7 @@ class _StudentImportDialogState extends State<StudentImportDialog> {
                     fontWeight: FontWeight.w700,
                     color: kTextMain)),
             const SizedBox(height: 4),
-            const Text('Excel (.xlsx) or CSV — one row per student',
+            const Text('Excel (.xlsx / .xls) or CSV — one row per student',
                 style: TextStyle(fontSize: 12.5, color: kTextSub)),
           ],
         ]),
