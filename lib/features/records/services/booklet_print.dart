@@ -1,3 +1,4 @@
+import 'dart:convert' show HtmlEscape;
 
 import 'package:clinicmanagementsystem/features/patients/models/individual_record_data.dart';
 import 'package:intl/intl.dart';
@@ -7,6 +8,7 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:clinicmanagementsystem/features/visits/models/visit_details.dart';
 
 import 'package:clinicmanagementsystem/shared/printing/document_template.dart';
+import 'package:clinicmanagementsystem/shared/printing/html_sheet.dart';
 
 enum BookletReportKind { service, individual, daily, byInstitute }
 
@@ -876,11 +878,113 @@ pw.Widget _totalBox(String text) => pw.Align(
       ),
     );
 
+// ---------------------------------------------------------------------------
+// HTML helpers (used by BookletPrint.buildHtml)
+// ---------------------------------------------------------------------------
+
+String _e(String s) => const HtmlEscape().convert(s);
+
+String _hTd(String t, {bool center = false, bool bold = false}) =>
+    '<td class="${center ? 'c ' : ''}${bold ? 'b' : ''}">${_e(t)}</td>';
+
+String _hRaw(String inner, [String cls = '']) => '<td class="$cls">$inner</td>';
+
+String _hName(_V v) =>
+    _hRaw('<b>${_e(v.name)}</b><div class="sm">${_e(v.id)}</div>');
+
+String _hLines(List<_Line> ls) {
+  if (ls.isEmpty) return _hTd('—');
+  final b = StringBuffer();
+  for (final l in ls) {
+    b.write('<div class="ln"><b>${_e(l.label)}</b>');
+    if (l.stacked.isNotEmpty) b.write('<div>${_e(l.stacked)}</div>');
+    b.write('</div>');
+  }
+  return _hRaw(b.toString());
+}
+
+String _hCols(List<double> flex) {
+  final sum = flex.fold<double>(0, (a, b) => a + b);
+  return '<colgroup>${[
+    for (final f in flex)
+      '<col style="width:${(f / sum * 100).toStringAsFixed(2)}%">'
+  ].join()}</colgroup>';
+}
+
+String _hTable(
+    List<String> headers, List<double> flex, List<List<String>> rows) {
+  final head = headers.map((h) => '<th>${_e(h)}</th>').join();
+  final body = rows.map((r) => '<tr>${r.join()}</tr>').join();
+  return '<table class="t">${_hCols(flex)}'
+      '<thead><tr>$head</tr></thead><tbody>$body</tbody></table>';
+}
+
+String _hSub(List<List<String>> rows) =>
+    '<table class="sub">${_hCols(_svcFlex)}${rows.map((r) => '<tr>${r.map((t) => '<td>${_e(t)}</td>').join()}</tr>').join()}</table>';
+
+String _hIndividual(List<_V> vs, bool blankRows) {
+  const heads = ['NO', 'DATE', 'TIME IN', 'TIME OUT', 'REASON/COMPLAINT'];
+  final head = StringBuffer();
+  for (final h in heads) {
+    head.write('<th>${_e(h)}</th>');
+  }
+  head.write('<th class="nopad"><table class="sub">${_hCols(_svcFlex)}'
+      '<tr><th>SERVICE</th><th>FINDINGS</th><th>TREATMENT / ACTION</th></tr>'
+      '</table></th>');
+
+  final body = StringBuffer();
+  for (var i = 0; i < vs.length; i++) {
+    final v = vs[i];
+    final sub = v.lines.isEmpty
+        ? [
+            ['-', '-', '-']
+          ]
+        : [
+            for (final l in v.lines)
+              [
+                l.label,
+                l.findings.isEmpty ? '-' : l.findings,
+                l.action.isEmpty ? '-' : l.action,
+              ]
+          ];
+    body.write('<tr>${_hTd('${i + 1}', center: true)}'
+        '${_hTd(_pretty(v.date), center: true)}'
+        '${_hTd(v.tin, center: true)}${_hTd(v.tout, center: true)}'
+        '${_hTd(v.complaint.isEmpty ? '-' : v.complaint)}'
+        '<td class="nopad">${_hSub(sub)}</td></tr>');
+  }
+  if (blankRows) {
+    for (var i = 0; i < 6; i++) {
+      body.write(
+          '<tr class="blank"><td></td><td></td><td></td><td></td><td></td>'
+          '<td class="nopad"><table class="sub">${_hCols(_svcFlex)}'
+          '<tr><td></td><td></td><td></td></tr></table></td></tr>');
+    }
+  }
+  return '<table class="t">${_hCols(_indFlex)}'
+      '<thead><tr>$head</tr></thead><tbody>$body</tbody></table>';
+}
+
+String _hSignatures({required bool withRoles}) {
+  String block(String label, String role) => '<div><div class="line">'
+      '<span>$label:</span><i></i></div>'
+      '${withRoles ? '<div class="role">$role</div>' : ''}</div>';
+  return '<div class="sig">${block('Prepared by', '(Clinic Nurse)')}'
+      '${block('Noted by', '(Clinic Head / Physician)')}</div>';
+}
+
 abstract final class BookletPrint {
   // The header/footer artwork never changes, so it is loaded once and reused
   // every time the preview or the printer rebuilds the PDF.
   static String? _headerCache;
   static String? _footerCache;
+
+  static Future<String> _footerSvg() async =>
+      _footerCache ??= (await loadSheetFooterSvg())
+          .replaceFirst(
+              'textLength="215" lengthAdjust="spacingAndGlyphs">LEARN TODAY',
+              'textLength="170" lengthAdjust="spacingAndGlyphs">LUX MUNDI')
+          .replaceFirst('HONESTY', 'INTEGRITY');
 
   /// [dateLine]      e.g. "NOV 2, 2026", "November 2-8, 2026",
   ///                 "October 28 - November 3, 2026", "SY 2025-2026 · Summer".
@@ -909,11 +1013,7 @@ abstract final class BookletPrint {
     final hang = f.width * 0.04;
 
     final headerSvg = _headerCache ??= await loadSheetHeaderSvg();
-    final footerSvg = _footerCache ??= (await loadSheetFooterSvg())
-        .replaceFirst(
-            'textLength="215" lengthAdjust="spacingAndGlyphs">LEARN TODAY',
-            'textLength="170" lengthAdjust="spacingAndGlyphs">LUX MUNDI')
-        .replaceFirst('HONESTY', 'INTEGRITY');
+    final footerSvg = await _footerSvg();
 
     final selected = serviceLabels.map((e) => e.trim().toLowerCase()).toSet();
 
@@ -1021,6 +1121,202 @@ abstract final class BookletPrint {
       ),
     );
     return doc;
+  }
+
+  /// Same report as [build], but as an HTML page for Chrome to print.
+  /// Chrome lays it out for the paper size picked in its print dialog.
+  static Future<String> buildHtml({
+    required BookletReportKind kind,
+    required String title,
+    required String dateLine,
+    required String nameLine,
+    required String instituteLine,
+    required List<Map<String, String>> records,
+    required VisitDetailsController? Function(Map<String, String>) visitFor,
+    required Map<String, IndividualRecord> roster,
+    required DraftLabelFn draftLabel,
+    List<String> serviceLabels = const [],
+    bool blankRows = false,
+  }) async {
+    final headerSvg = _headerCache ??= await loadSheetHeaderSvg();
+    final footerSvg = await _footerSvg();
+
+    final selected = serviceLabels.map((e) => e.trim().toLowerCase()).toSet();
+    final impression = switch (kind) {
+      BookletReportKind.service || BookletReportKind.individual => true,
+      _ => kShowImpressionOnDailyAndInstitute,
+    };
+
+    var vs = _mergeSameDay([
+      for (final r in records)
+        _visit(r, visitFor(r), roster, selected, impression, draftLabel),
+    ]);
+    if (kind == BookletReportKind.individual) vs = vs.reversed.toList();
+
+    final table = switch (kind) {
+      BookletReportKind.service => _serviceHtml(vs, selected),
+      BookletReportKind.daily => _dailyHtml(vs),
+      BookletReportKind.individual => _hIndividual(vs, blankRows),
+      BookletReportKind.byInstitute => _instituteHtml(vs),
+    };
+
+    final anyOpen = vs.any((v) => v.open);
+    final body = '''
+<div class="ttl">
+  <div class="office">MEDICAL AND DENTAL CLINIC OFFICE</div>
+  <div class="loc">Maloro, Tangub City</div>
+  <div class="title">${_e(title)}</div>
+  ${instituteLine.isEmpty ? '' : '<div class="inst">${_e(instituteLine)}</div>'}
+</div>
+<div class="meta">
+  <span>${kind == BookletReportKind.individual ? 'Name: ${_e(nameLine)}' : ''}</span>
+  <span>Date: ${_e(dateLine)}</span>
+</div>
+$table
+${anyOpen ? '<div class="note">—  visit still open (no time out yet)</div>' : ''}
+${_hSignatures(withRoles: kind == BookletReportKind.daily)}
+''';
+
+    return sheetDocument(
+      title: title,
+      headerSvg: headerSvg,
+      footerSvg: footerSvg,
+      bodyHtml: body,
+    );
+  }
+
+  static String _serviceHtml(List<_V> vs, Set<String> selected) {
+    if (selected.length == 1) {
+      ServiceDraft? sample;
+      outer:
+      for (final v in vs) {
+        for (final d in v.drafts) {
+          sample = d;
+          break outer;
+        }
+      }
+      final spec = sample == null ? null : _specFor(sample.serviceId);
+      if (spec != null) {
+        final rows = <List<String>>[];
+        for (var i = 0; i < vs.length; i++) {
+          final v = vs[i];
+          final sessions = v.parts ?? [v];
+          final per = [
+            for (final s in sessions)
+              (s.drafts.isEmpty || s.vc == null)
+                  ? List<String>.filled(spec.headers.length, '')
+                  : spec.cells(_Ctx(
+                      s.drafts.first, s.vc!, s.when, s.drafts.first.label)),
+          ];
+          rows.add([
+            _hTd('${i + 1}', center: true),
+            _hTd(_pretty(v.date, 'MMM d'), center: true),
+            _hTd(v.tin, center: true),
+            _hTd(v.tout, center: true),
+            _hName(v),
+            _hTd(v.inst, center: true),
+            for (var c = 0; c < spec.headers.length; c++)
+              _hTd(per
+                  .map((p) => p[c].isEmpty && per.length > 1 ? '-' : p[c])
+                  .join('\n')),
+          ]);
+        }
+        return _hTable(
+          ['NO', 'DATE', 'IN', 'OUT', 'NAME', 'INSTITUTE', ...spec.headers],
+          [.45, .85, .8, .8, 1.9, .9, ...spec.flex],
+          rows,
+        );
+      }
+    }
+    final rows = <List<String>>[];
+    for (var i = 0; i < vs.length; i++) {
+      final v = vs[i];
+      rows.add([
+        _hTd('${i + 1}', center: true),
+        _hTd(_pretty(v.date, 'MMM d'), center: true),
+        _hTd(v.tin, center: true),
+        _hTd(v.tout, center: true),
+        _hName(v),
+        _hTd(v.inst, center: true),
+        _hTd(v.complaint),
+        _hLines(v.lines),
+      ]);
+    }
+    return _hTable(
+      [
+        'NO',
+        'DATE',
+        'IN',
+        'OUT',
+        'NAME',
+        'INST',
+        'REASON/COMPLAINT',
+        'SERVICES & RESULTS'
+      ],
+      [.45, .8, .8, .8, 1.7, .7, 2.2, 4.0],
+      rows,
+    );
+  }
+
+  static String _dailyHtml(List<_V> vs) {
+    final rows = <List<String>>[];
+    for (var i = 0; i < vs.length; i++) {
+      final v = vs[i];
+      rows.add([
+        _hTd('${i + 1}', center: true),
+        _hTd(v.tin, center: true),
+        _hTd(v.tout, center: true),
+        _hName(v),
+        _hTd(v.inst, center: true),
+        _hTd(v.complaint),
+        _hLines(v.lines),
+      ]);
+    }
+    return _hTable(
+      [
+        'NO',
+        'IN',
+        'OUT',
+        'NAME / ID',
+        'INST',
+        'REASON / COMPLAINT',
+        'SERVICES & RESULTS'
+      ],
+      [.4, .8, .8, 1.6, .55, 2.0, 3.6],
+      rows,
+    );
+  }
+
+  static String _instituteHtml(List<_V> vs) {
+    final rows = <List<String>>[];
+    for (var i = 0; i < vs.length; i++) {
+      final v = vs[i];
+      final times = v.parts == null
+          ? '${v.tin} - ${v.tout}'
+          : v.parts!.map((p) => '${p.tin} - ${p.tout}').join('\n');
+      rows.add([
+        _hTd('${i + 1}', center: true),
+        _hTd(times, center: true),
+        _hTd(v.name),
+        _hTd(v.group),
+        _hTd(v.year, center: true),
+        _hTd(v.complaint),
+        _hLines(v.lines),
+      ]);
+    }
+    return _hTable(
+      [
+        'NO',
+        'TIME IN / OUT',
+        'NAME',
+        'PROGRAM',
+        'YL',
+        'REASON/COMPLAINT',
+        'SERVICES & RESULT'
+      ],
+      [.45, 1.5, 1.6, 1.1, .6, 2.2, 3.7],
+      rows,
+    );
   }
 
   static void _service(List<pw.Widget> out, List<_V> vs, Set<String> selected) {
