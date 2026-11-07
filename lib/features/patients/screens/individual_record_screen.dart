@@ -62,7 +62,8 @@ class _IndividualRecordScreenState extends State<IndividualRecordScreen>
   bool _showInactive = false;
 
   bool _saving = false;
-
+  int _page = 0;
+  static const int _pageSize = 50;
   VoidCallback? _dataListener;
 
   IndividualRecord? _editing;
@@ -141,14 +142,18 @@ class _IndividualRecordScreenState extends State<IndividualRecordScreen>
   Map<String, List<String>> get _catalog => kProgramCatalog;
 
   final List<IndividualRecord> _records = [];
-
-  bool _suppressDirectoryRefresh = false;
+  
+   bool _suppressDirectoryRefresh = false;
+  bool _busy = false;
 
   Future<void> _loadRecords({
     bool silent = false,
     bool? includeInactiveOverride,
     String? academicPeriodIdOverride,
   }) async {
+    if (silent && _busy) return;
+    _busy = true;
+
     if (mounted && !silent) {
       setState(() {
         _loading = true;
@@ -172,7 +177,9 @@ class _IndividualRecordScreenState extends State<IndividualRecordScreen>
         IndividualRecordService.fetchAll(
             includeInactive: true, academicPeriodId: studentPeriodId),
         IndividualRecordService.fetchAll(
-            includeInactive: false, academicPeriodId: activeId),
+            includeInactive: false,
+            academicPeriodId: activeId,
+            excludeStudents: true),
         IndividualRecordService.fetchUserNames(),
       ]);
       final students = (results[0] as List<IndividualRecord>)
@@ -201,11 +208,13 @@ class _IndividualRecordScreenState extends State<IndividualRecordScreen>
         _loading = false;
         _loadError = '$e';
       });
+    } finally {
+      _busy = false;
     }
   }
 
   void _onSearchChanged(String _) {
-    setState(() {});
+    setState(() => _page = 0);
   }
 
   void _directoryListener() {
@@ -344,7 +353,7 @@ class _IndividualRecordScreenState extends State<IndividualRecordScreen>
           ? 'Faculty ID'
           : 'Staff ID';
 
-  List<IndividualRecord> get _filtered {
+   List<IndividualRecord> get _filtered {
     var rows = _records;
     if (filter == 'Student' && !_showInactive) {
       final pid = _filterAcademicPeriodId ?? ReferenceCatalog.activePeriod?.id;
@@ -352,7 +361,16 @@ class _IndividualRecordScreenState extends State<IndividualRecordScreen>
         rows = rows.where((r) => r.academicPeriodId == pid).toList();
       }
     }
-    return filterRoster(rows: rows, category: filter, query: search.text);
+    final out =
+        filterRoster(rows: rows, category: filter, query: search.text).toList();
+    out.sort((a, b) {
+      int c = a.lastName.toLowerCase().compareTo(b.lastName.toLowerCase());
+      if (c != 0) return c;
+      c = a.firstName.toLowerCase().compareTo(b.firstName.toLowerCase());
+      if (c != 0) return c;
+      return a.middleName.toLowerCase().compareTo(b.middleName.toLowerCase());
+    });
+    return out;
   }
 
   int _countFor(String category) => countInCategory(_records, category);
@@ -1114,7 +1132,10 @@ class _IndividualRecordScreenState extends State<IndividualRecordScreen>
             child: GestureDetector(
               onTap: () {
                 if (filter == tab) return;
-                setState(() => filter = tab);
+                                setState(() {
+                  filter = tab;
+                  _page = 0;
+                });
               },
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 200),
@@ -1492,11 +1513,11 @@ class _IndividualRecordScreenState extends State<IndividualRecordScreen>
         inputFormatters: isStudent
             ? [
                 FilteringTextInputFormatter.digitsOnly,
-                LengthLimitingTextInputFormatter(6)
+                LengthLimitingTextInputFormatter(15)
               ]
             : [],
         onChanged: (v) {
-          if (!isEdit && isStudent && v.trim().length == 6) {
+          if (!isEdit && isStudent && v.trim().length >= 3) {
             _tryLoadExistingPerson();
           }
         },
@@ -1534,9 +1555,7 @@ class _IndividualRecordScreenState extends State<IndividualRecordScreen>
                 : null),
         validator: (v) {
           if (v == null || v.trim().isEmpty) return 'ID is required';
-          if (isStudent && v.trim().length != 6) {
-            return 'Must be exactly 6 digits';
-          }
+         
           return null;
         },
       ),
@@ -2350,8 +2369,17 @@ class _IndividualRecordScreenState extends State<IndividualRecordScreen>
     if (name != null && name.isNotEmpty) return name;
     return id.length > 8 ? id.substring(0, 8) : id;
   }
+    String _listName(IndividualRecord r) {
+    final last = r.lastName.trim();
+    final rest = [r.firstName.trim(), r.middleName.trim()]
+        .where((s) => s.isNotEmpty)
+        .join(' ');
+    if (last.isEmpty) return rest;
+    return rest.isEmpty ? last : '$last, $rest';
+  }
 
   Widget _buildTable(List<IndividualRecord> list) {
+        if (_page * _pageSize >= list.length) _page = 0;
     return Container(
       decoration: BoxDecoration(
         color: kCard,
@@ -2414,7 +2442,13 @@ class _IndividualRecordScreenState extends State<IndividualRecordScreen>
                                   const DataColumn(label: Text('CONTACT')),
                                   const DataColumn(label: Text('ACTIONS')),
                                 ],
-                                rows: list.asMap().entries.map((entry) {
+                                rows: list
+                                    .skip(_page * _pageSize)
+                                    .take(_pageSize)
+                                    .toList()
+                                    .asMap()
+                                    .entries
+                                    .map((entry) {
                                   final r = entry.value;
                                   final even = entry.key % 2 == 0;
                                   return DataRow(
@@ -2436,7 +2470,7 @@ class _IndividualRecordScreenState extends State<IndividualRecordScreen>
                                         mainAxisAlignment:
                                             MainAxisAlignment.center,
                                         children: [
-                                          Text(r.fullName,
+                                          Text(_listName(r),
                                               style: const TextStyle(
                                                   fontWeight: FontWeight.w600,
                                                   fontSize: 15)),
@@ -2501,7 +2535,30 @@ class _IndividualRecordScreenState extends State<IndividualRecordScreen>
                       ),
                     ),
                   ),
-                ]),
+                                 Padding(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    child:
+                        Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+                      Text(
+                          '${_page * _pageSize + 1}–'
+                          '${((_page + 1) * _pageSize).clamp(0, list.length)} '
+                          'of ${list.length}',
+                          style:
+                              const TextStyle(fontSize: 13, color: kTextSub)),
+                      IconButton(
+                        onPressed:
+                            _page > 0 ? () => setState(() => _page--) : null,
+                        icon: const Icon(Icons.chevron_left_rounded),
+                      ),
+                      IconButton(
+                        onPressed: (_page + 1) * _pageSize < list.length
+                            ? () => setState(() => _page++)
+                            : null,
+                        icon: const Icon(Icons.chevron_right_rounded),
+                      ),
+                    ]),
+                  ), ]),
     );
   }
 
@@ -2638,6 +2695,8 @@ class _AddProgramDialogState extends State<_AddProgramDialog> {
   final TextEditingController _progNameCtrl = TextEditingController();
   String? _error;
   bool _saving = false;
+
+   
 
   @override
   void initState() {

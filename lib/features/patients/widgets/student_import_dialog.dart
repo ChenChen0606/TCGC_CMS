@@ -386,7 +386,7 @@ class _StudentImportDialogState extends State<StudentImportDialog> {
             const SizedBox(height: 4),
             Text('${_formatBytes(_fileSize)} · tap to choose a different file',
                 style: const TextStyle(fontSize: 12.5, color: kTextSub)),
-          ] else ...[
+          ] else ...[ 
             const Text('Tap to choose a file',
                 style: TextStyle(
                     fontSize: 15,
@@ -456,6 +456,10 @@ class _StudentImportDialogState extends State<StudentImportDialog> {
               'so they are NOT saved again.',
               kTextSub,
             ),
+            if (p.invalid > 0) ...[
+              const SizedBox(height: 10),
+              _infoBox(_invalidSummaryText(p), kDanger),
+            ],
             if (_error != null) ...[
               const SizedBox(height: 12),
               _errorRow(_error!),
@@ -533,7 +537,24 @@ class _StudentImportDialogState extends State<StudentImportDialog> {
         return kTextSub;
     }
   }
-
+    String _invalidSummaryText(StudentImportPlan p) {
+    final counts = <String, int>{};
+    for (final r in p.rows) {
+      if (r.status != kImportInvalid) continue;
+      for (final part in r.note.split('; ')) {
+        counts[part] = (counts[part] ?? 0) + 1;
+      }
+    }
+    final entries = counts.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    final lines = [
+      for (final e in entries.take(20)) '• ${e.value} × ${e.key}',
+    ];
+    if (entries.length > 20) {
+      lines.add('• …and ${entries.length - 20} more reason(s)');
+    }
+    return 'Why ${p.invalid} row(s) are Invalid:\n${lines.join('\n')}';
+  }
   Widget _analysisTable(StudentImportPlan p) {
     return Container(
       decoration: BoxDecoration(
@@ -575,7 +596,13 @@ class _StudentImportDialogState extends State<StudentImportDialog> {
                   DataColumn(label: Text('NOTE')),
                 ],
                 rows: [
-                  for (final r in p.rows)
+                  for (final r in ([...p.rows]..sort((a, b) {
+                    final ai = a.status == kImportInvalid ? 0 : 1;
+                    final bi = b.status == kImportInvalid ? 0 : 1;
+                    return ai != bi
+                        ? ai - bi
+                        : a.rowNumber.compareTo(b.rowNumber);
+                  })))
                     DataRow(cells: [
                       DataCell(Text(r.record.id.isEmpty ? '—' : r.record.id,
                           style: const TextStyle(

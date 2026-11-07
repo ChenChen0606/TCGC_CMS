@@ -72,11 +72,12 @@ $_enrolmentSelect,
     created_at,
     created_by''';
 
-  static Future<List<IndividualRecord>> fetchAll({
+   static Future<List<IndividualRecord>> fetchAll({
     String? category,
     String? search,
     bool includeInactive = false,
     String? academicPeriodId,
+    bool excludeStudents = false,
   }) async {
     final cat = category?.trim() ?? '';
     final needle = (search ?? '').trim();
@@ -90,7 +91,13 @@ $_enrolmentSelect,
       }
     }
 
-    var q = supabaseClient.from(_enrolments).select(_rosterSelect);
+    var q = supabaseClient.from(_enrolments).select(excludeStudents
+        ? _rosterSelect.replaceFirst('person:individual_records!left(',
+            'person:individual_records!inner(')
+        : _rosterSelect);
+    if (excludeStudents) {
+      q = q.neq('person.person_type', personTypeForStorage('Student'));
+    }
 
     if (!includeInactive) q = q.eq('status', kRecordStatusActive);
 
@@ -133,7 +140,18 @@ $_enrolmentSelect,
       }
     }
 
-    final rows = await q;
+      // Supabase returns at most 1000 rows per request, so read page by page.
+    final rows = <dynamic>[];
+    const pageSize = 1000;
+    var from = 0;
+    while (true) {
+      final page = await q
+          .order('academic_record_id', ascending: true)
+          .range(from, from + pageSize - 1);
+      rows.addAll(page);
+      if (page.length < pageSize) break;
+      from += pageSize;
+    }
     return _dedupe(rows
         .map<IndividualRecord>(
             (r) => IndividualRecord.fromSupabase(Map<String, dynamic>.from(r)))

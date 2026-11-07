@@ -461,8 +461,8 @@ class StudentImportService {
     if (RegExp(r'^\d+\.0+$').hasMatch(id)) id = id.split('.').first;
     if (id.isEmpty) {
       problems.add('Student ID is missing');
-    } else if (!RegExp(r'^\d{6}$').hasMatch(id)) {
-      problems.add('Student ID must be exactly 6 digits');
+    } else if (!RegExp(r'^\d{1,15}$').hasMatch(id)) {
+      problems.add('Student ID must be numbers only (up to 15 digits)');
     }
 
     final first = (v['first'] ?? '').trim();
@@ -598,9 +598,10 @@ class StudentImportService {
     try {
       await ReferenceCatalog.load(force: true);
     } catch (_) {}
-    if (!ReferenceCatalog.isLoaded) {
-      throw const ImportFileException(
-          'The school lists (programs, institutes, terms) could not be loaded. '
+       if (!ReferenceCatalog.isLoaded) {
+      throw ImportFileException(
+          'The school lists (programs, institutes, terms) could not be loaded.\n'
+          '${ReferenceCatalog.lastError ?? ''}\n'
           'Check the connection, sign in again and retry.');
     }
     final period = ReferenceCatalog.activePeriod;
