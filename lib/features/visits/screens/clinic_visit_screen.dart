@@ -1143,7 +1143,7 @@ bool _matchesTokens(ClinicProfile p, List<String> tokens) {
     return Semantics(
       button: true,
       selected: selected,
-      label: '${p.fullName}, ${p.category}, ID ${p.id}',
+      label: '${_lastFirst(p)}, ${p.category}, ID ${p.id}',
       child: InkWell(
         onTap: () => _selectVisitor(p),
         borderRadius: BorderRadius.circular(10),
@@ -1174,7 +1174,7 @@ bool _matchesTokens(ClinicProfile p, List<String> tokens) {
                     Row(children: [
                       Expanded(
                         child: Text(
-                          p.fullName,
+                          _lastFirst(p),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
@@ -1399,7 +1399,7 @@ bool _matchesTokens(ClinicProfile p, List<String> tokens) {
             Row(children: [
               Flexible(
                 child: Text(
-                  v.fullName,
+                  _lastFirst(v),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
@@ -1767,7 +1767,7 @@ bool _matchesTokens(ClinicProfile p, List<String> tokens) {
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  v.fullName,
+                  _lastFirst(v),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
@@ -2361,7 +2361,7 @@ bool _matchesTokens(ClinicProfile p, List<String> tokens) {
                       'Tick at least one service for this visit on step 2.')
                 else ...[
                   VisitReviewCard(title: 'Visitor', lines: [
-                    VisitReviewLine.pair('Name', v.fullName),
+                    VisitReviewLine.pair('Name', _lastFirst(v)),
                     VisitReviewLine.pair('School ID', v.id),
                     VisitReviewLine.pair('Role', v.category),
                     VisitReviewLine.pair('Affiliation', v.affiliationLabel),
@@ -3136,7 +3136,16 @@ bool _matchesTokens(ClinicProfile p, List<String> tokens) {
       onChanged: onChanged,
     );
   }
-
+/// "LAST, First Middle Suffix" (comma only after the last name)
+    String _lastFirst(ClinicProfile p) {
+      final given = [p.firstName, p.middleName, p.suffix]
+          .map((e) => e.trim())
+          .where((e) => e.isNotEmpty)
+          .join(' ');
+      final last = p.lastName.trim();
+      if (last.isEmpty) return given;
+      return given.isEmpty ? last : '$last, $given';
+    }
   String _orDash(String? value) {
     final t = (value ?? '').trim();
     return t.isEmpty ? '—' : t;

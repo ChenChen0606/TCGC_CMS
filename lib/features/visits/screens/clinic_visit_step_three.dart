@@ -156,7 +156,17 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
       _texts[key] = created;
       return created;
     }
-    if (existing.text != value) existing.text = value;
+    if (existing.text != value) {
+      // Don't wipe "27." or "27.0" while the user is still typing.
+      final numeric = RegExp(r'^\d*\.?\d*$');
+      final typed = double.tryParse(existing.text);
+      final stored = double.tryParse(value);
+      final sameNumber = numeric.hasMatch(existing.text) &&
+          typed != null &&
+          stored != null &&
+          typed == stored;
+      if (!sameNumber) existing.text = value;
+    }
     return existing;
   }
 
@@ -1391,7 +1401,7 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
       controller: controller,
       keyboardType: const TextInputType.numberWithOptions(decimal: true),
       inputFormatters: [
-        FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+        FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d*$')),
       ],
       onChanged: (value) => _onText(d, f, value),
       style: const TextStyle(fontSize: 13, color: AppColors.textMain),

@@ -985,6 +985,9 @@ abstract final class BookletPrint {
               'textLength="215" lengthAdjust="spacingAndGlyphs">LEARN TODAY',
               'textLength="170" lengthAdjust="spacingAndGlyphs">LUX MUNDI')
           .replaceFirst('HONESTY', 'INTEGRITY');
+  static Future<String> headerSvg() async =>
+    _headerCache ??= await loadSheetHeaderSvg();
+  static Future<String> footerSvg() => _footerSvg();
 
   /// [dateLine]      e.g. "NOV 2, 2026", "November 2-8, 2026",
   ///                 "October 28 - November 3, 2026", "SY 2025-2026 · Summer".
@@ -994,6 +997,8 @@ abstract final class BookletPrint {
   ///                 "All Institutes" so nothing is printed.
   /// [draftLabel]    maps a service draft to its display name
   ///                 (BP Taking, Temperature Checking, ...).
+ 
+ 
   static Future<pw.Document> build({
     required BookletReportKind kind,
     required String title,
@@ -1182,6 +1187,7 @@ ${_hSignatures(withRoles: kind == BookletReportKind.daily)}
       headerSvg: headerSvg,
       footerSvg: footerSvg,
       bodyHtml: body,
+      repeatHeader: true,
     );
   }
 

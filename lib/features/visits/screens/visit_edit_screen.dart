@@ -188,7 +188,7 @@ class _VisitEditScreenState extends State<VisitEditScreen> {
     if (!mounted) return;
     setState(() => _saving = false);
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text('Visit updated by ${widget.userName}.'),
+     content: const Text('Record updated.'),
       backgroundColor: AppColors.primary,
       behavior: SnackBarBehavior.floating,
     ));

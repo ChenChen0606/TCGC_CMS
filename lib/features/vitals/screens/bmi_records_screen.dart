@@ -1,11 +1,16 @@
 // ignore_for_file: avoid_print
 
+import 'dart:convert' show HtmlEscape;
+
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 
+import 'package:clinicmanagementsystem/features/records/services/booklet_print.dart';
+import 'package:clinicmanagementsystem/shared/printing/html_print.dart';
+import 'package:clinicmanagementsystem/shared/printing/html_sheet.dart';
 import 'package:clinicmanagementsystem/features/vitals/models/vitals.dart';
 import 'package:clinicmanagementsystem/core/services/data_tracker.dart';
 import 'package:clinicmanagementsystem/core/services/reference_data_service.dart';
@@ -147,11 +152,11 @@ class BmiRecord {
   }
 
   String get fullName {
-  final given =
-      <String>[fn, mn, suffix].where((p) => p.isNotEmpty).join(' ');
-  if (ln.isEmpty) return given;
-  return given.isEmpty ? ln : '$ln, $given';
-}
+    final given =
+        <String>[fn, mn, suffix].where((p) => p.isNotEmpty).join(' ');
+    if (ln.isEmpty) return given;
+    return given.isEmpty ? ln : '$ln, $given';
+  }
 
   static DateTime? _parseTs(String? s) {
     if (s == null || s.trim().isEmpty) return null;
@@ -469,20 +474,23 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
       _selectedInstitute = 'All';
     }
   }
-      int _compareBmi(BmiRecord a, BmiRecord b) {
-        int s(String x, String y) => x.toLowerCase().compareTo(y.toLowerCase());
-        var c = s(a.ln, b.ln);
-        if (c != 0) return c;
-        c = s(a.fn, b.fn);
-        if (c != 0) return c;
-        c = s(a.mn, b.mn);
-        if (c != 0) return c;
-        c = a.personId.compareTo(b.personId);
-        if (c != 0) return c;
-        final da = a.visitDate, db = b.visitDate;
-        if (da == null || db == null) return da == null ? (db == null ? 0 : 1) : -1;
-        return db.compareTo(da); // same person: newest first
-      }
+
+  int _compareBmi(BmiRecord a, BmiRecord b) {
+    int s(String x, String y) => x.toLowerCase().compareTo(y.toLowerCase());
+    var c = s(a.ln, b.ln);
+    if (c != 0) return c;
+    c = s(a.fn, b.fn);
+    if (c != 0) return c;
+    c = s(a.mn, b.mn);
+    if (c != 0) return c;
+    c = a.personId.compareTo(b.personId);
+    if (c != 0) return c;
+    final da = a.visitDate, db = b.visitDate;
+    if (da == null || db == null) {
+      return da == null ? (db == null ? 0 : 1) : -1;
+    }
+    return db.compareTo(da); // same person: newest first
+  }
 
   void _applyFilters() {
     final q = _searchQuery.trim().toLowerCase();
@@ -597,7 +605,8 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
   List<BmiRecord> _ofGroup(List<BmiRecord> list, String group) =>
       list.where((r) => _inGroup(r, group)).toList();
 
-  String _groupTitle(String g) => g == 'Student' ? 'Students' : 'Faculty & Staff';
+  String _groupTitle(String g) =>
+      g == 'Student' ? 'Students' : 'Faculty & Staff';
 
   IconData _groupIcon(String g) =>
       g == 'Student' ? Icons.school_rounded : Icons.badge_outlined;
@@ -634,7 +643,8 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
     for (final r in records) {
       final unit = _unitOf(r).trim();
       final pos = r.position.trim();
-      final key = '${unit.isEmpty ? 'Unknown' : unit}$sep${pos.isEmpty ? '-' : pos}';
+      final key =
+          '${unit.isEmpty ? 'Unknown' : unit}$sep${pos.isEmpty ? '-' : pos}';
       groups.putIfAbsent(key, () => <BmiRecord>[]).add(r);
     }
     final keys = groups.keys.toList()..sort();
@@ -752,11 +762,22 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
 
   List<String> _detailHeaders(String g) => g == 'Student'
       ? const [
-          'Student ID', 'Name', 'Program', 'Age', 'Sex', 'Birthdate', 'BMI',
+          'Student ID',
+          'Name',
+          'Program',
+          'Age',
+          'Sex',
+          'Birthdate',
+          'BMI',
           'BMI Indicator'
         ]
       : const [
-          'Name', 'Institute / Office', 'Age', 'Sex', 'Birthdate', 'BMI',
+          'Name',
+          'Institute / Office',
+          'Age',
+          'Sex',
+          'Birthdate',
+          'BMI',
           'BMI Indicator'
         ];
 
@@ -774,24 +795,53 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
     return [r.fullName, _dash(_unitOf(r)), ...tail];
   }
 
+  // ── Print table columns (no Student ID, F/M, numeric birthdate) ────────
+
+  String _sexLetter(String s) {
+    final t = s.trim().toLowerCase();
+    if (t.startsWith('f')) return 'F';
+    if (t.startsWith('m')) return 'M';
+    return '-';
+  }
+
+  String _fmtNumericDate(DateTime? d) =>
+      d == null ? '-' : DateFormat('MM/dd/yyyy').format(d);
+
   List<String> _printDetailHeaders(String g) => g == 'Student'
       ? [
-          'Student ID', 'Name', 'Age', 'Sex', 'Birthdate', 'Program',
-          'Year Level', 'Height', 'Weight', 'BMI', 'Indicator'
+          'Name',
+          'Age',
+          'Sex',
+          'Birthdate',
+          'Program',
+          'Year Level',
+          'Height',
+          'Weight',
+          'BMI',
+          'Indicator'
         ]
       : [
-          'Name', 'Institute / Office', 'Age', 'Sex', 'Birthdate', 'BMI',
+          'Name',
+          'Institute / Office',
+          'Age',
+          'Sex',
+          'Birthdate',
+          'BMI',
           'BMI Indicator'
         ];
+
+  /// Column widths for the numbered details table (first value = NO. column).
+  List<double> _printDetailFlex(String g) => g == 'Student'
+      ? [.45, 2.6, .55, .5, 1.1, 1.2, 1.0, .8, .8, .7, 1.2]
+      : [.45, 2.8, 2.0, .55, .5, 1.1, .7, 1.3];
 
   List<String> _printDetailCells(String g, BmiRecord r) {
     if (g == 'Student') {
       return [
-        r.personId,
         r.fullName,
-        r.age?.toString() ?? '—',
-        _dash(r.sex),
-        _fmtDate(r.dateOfBirth),
+        r.age?.toString() ?? '-',
+        _sexLetter(r.sex),
+        _fmtNumericDate(r.dateOfBirth),
         _dash(r.programName),
         _dash(r.yearLevel),
         _fmtNum(r.heightCm),
@@ -803,9 +853,9 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
     return [
       r.fullName,
       _dash(_unitOf(r)),
-      r.age?.toString() ?? '—',
-      _dash(r.sex),
-      _fmtDate(r.dateOfBirth),
+      r.age?.toString() ?? '-',
+      _sexLetter(r.sex),
+      _fmtNumericDate(r.dateOfBirth),
       _bmiText(r),
       r.indicator,
     ];
@@ -1650,8 +1700,7 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
       value: _selectedSemester,
       options: ['All', ..._availableSemesters],
       allLabel: 'All Semesters',
-      labelFor: (o) =>
-          '$o${_hasRecordsFor(_selectedAcadYear, o) ? '' : ' s'}',
+      labelFor: (o) => '$o${_hasRecordsFor(_selectedAcadYear, o) ? '' : ' s'}',
       onChanged: (v) => setState(() {
         _selectedSemester = v;
         _applyFilters();
@@ -1996,7 +2045,25 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
 
   // ── Print preview ──────────────────────────────────────────────────────
 
+  /// Web: opens Chrome's print dialog (same as the Records Booklet).
+  /// Other platforms: the PDF preview dialog.
   Future<void> _showPrintPreview() async {
+    if (htmlPrintSupported) {
+      final messenger = ScaffoldMessenger.of(context);
+      try {
+        final html = await _buildHtml();
+        await printHtml(html, title: 'TCGC BMI Records');
+      } catch (e) {
+        messenger.showSnackBar(
+          SnackBar(content: Text('Could not print the BMI records: $e')),
+        );
+      }
+      return;
+    }
+    await _showPdfPreview();
+  }
+
+  Future<void> _showPdfPreview() async {
     await showDialog<void>(
       context: context,
       builder: (ctx) {
@@ -2124,7 +2191,153 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
           'Birthdate: ${_rangeText(_birthRange!.start, _birthRange!.end)}',
       ].join('  |  ').replaceAll('—', '-').replaceAll('–', '-');
 
-  // ── Print: document ────────────────────────────────────────────────────
+  // ── Print: HTML (web, Chrome print dialog) ─────────────────────────────
+
+  String _h(String s) => const HtmlEscape().convert(s);
+
+  String _htmlTable({
+    required List<String> headers,
+    required List<List<String>> rows,
+    bool numbered = false,
+    bool dense = false,
+    int labelCols = 1,
+    List<double>? flex,
+  }) {
+    String s(String x) => _h(x.replaceAll('—', '-').replaceAll('–', '-'));
+    final heads = [if (numbered) 'NO.', ...headers];
+    final cols = flex ??
+        [
+          if (numbered) .5,
+          for (var i = 0; i < headers.length; i++) i < labelCols ? 3.0 : 1.0,
+        ];
+    final sum = cols.fold<double>(0, (a, b) => a + b);
+    final colgroup = '<colgroup>${[
+      for (final f in cols)
+        '<col style="width:${(f / sum * 100).toStringAsFixed(2)}%">'
+    ].join()}</colgroup>';
+    final head = heads.map((x) => '<th>${s(x)}</th>').join();
+    final body = rows.isEmpty
+        ? '<tr>${List.filled(heads.length, '<td></td>').join()}</tr>'
+        : [
+            for (var i = 0; i < rows.length; i++)
+              '<tr>${[
+                if (numbered) '${i + 1}',
+                ...rows[i],
+              ].map((c) => '<td>${s(c)}</td>').join()}</tr>'
+          ].join();
+    return '<table class="t bmi${dense ? ' dense' : ''}">$colgroup'
+        '<thead><tr>$head</tr></thead><tbody>$body</tbody></table>';
+  }
+
+  String _htmlStatStrip(List<BmiRecord> records, String group) {
+    int count(String c) => records.where((r) => r.indicator == c).length;
+    final all = <(String, int, String, String)>[
+      ('Total ${_groupTitle(group)}', records.length, '#F1F5F9', '#334155'),
+      ('Underweight', count('Underweight'), '#E0F2FE', '#0369A1'),
+      ('Normal', count('Normal'), '#DCFCE7', '#15803D'),
+      ('Overweight', count('Overweight'), '#FFF7ED', '#B45309'),
+      ('Obese', count('Obese'), '#FEE2E2', '#B91C1C'),
+    ];
+    final stats = _singleIndicator
+        ? all.where((s) => s.$1 == _selectedClassification)
+        : all;
+    return '<div class="stats">${[
+      for (final s in stats)
+        '<span class="chip" style="background:${s.$3};color:${s.$4}">'
+            '<b>${s.$2}</b>${_h(s.$1)}</span>'
+    ].join()}</div>';
+  }
+
+  String _htmlMeta(String dateLabel, String filterLine) {
+    if (dateLabel.isEmpty && filterLine.isEmpty) return '';
+    return '<div class="meta"><span>'
+        '${filterLine.isEmpty ? '' : '<b>Filters:</b> ${_h(filterLine)}'}</span>'
+        '<span>${dateLabel.isEmpty ? '' : '<b>Date:</b> ${_h(dateLabel)}'}</span></div>';
+  }
+
+  String _htmlGroup(
+    String group,
+    List<BmiRecord> recs,
+    String dateLabel,
+    String filterLine, {
+    required bool first,
+  }) {
+    final b = StringBuffer();
+    if (!first) b.write('<div style="break-before:page"></div>');
+    b.write(_htmlStatStrip(recs, group));
+    b.write(_htmlMeta(dateLabel, filterLine));
+    for (final blk in _summaryBlocksFor(group, recs)) {
+      b.write('<div class="sec">${_h(blk.title.toUpperCase())}</div>');
+      b.write(_htmlTable(
+        headers:
+            _summaryHeaders(blk.first, withTotal: false, second: blk.second),
+        rows: [for (final s in blk.rows) _blockCells(blk, s, withTotal: false)],
+        labelCols: blk.second == null ? 1 : 2,
+      ));
+    }
+    b.write('<div class="sec">${_h(_printDetailsTitle(group))}</div>');
+    b.write(_htmlTable(
+      headers: _printDetailHeaders(group),
+      rows: [for (final r in recs) _printDetailCells(group, r)],
+      numbered: true,
+      dense: true,
+      flex: _printDetailFlex(group),
+    ));
+    return b.toString();
+  }
+
+  Future<String> _buildHtml() async {
+    final records = _filteredRecords;
+    final dateLabel =
+        _printDateLabel(records).replaceAll('—', '-').replaceAll('–', '-');
+    final filterLine = _printFilterLine();
+    final groups = [
+      for (final g in _visibleGroups)
+        if (_ofGroup(records, g).isNotEmpty) g,
+    ];
+    final inst = _selectedInstitute == 'All' ? '' : _selectedInstitute;
+
+    final headerSvg = await BookletPrint.headerSvg();
+    final footerSvg = await BookletPrint.footerSvg();
+
+    final body = StringBuffer('''
+<style>
+.t.bmi th, .t.bmi td { text-align: center; }
+.t.dense th, .t.dense td { padding: 2px 4px; font-size: 8pt; line-height: 1.15; }
+.stats { display: flex; justify-content: center; gap: 6px; margin: 8px 0; }
+.chip { border-radius: 5px; padding: 4px 10px; font-size: 7.5pt; }
+.chip b { font-size: 12pt; margin-right: 5px; }
+.sec { font-size: 11pt; font-weight: bold; margin: 14px 0 6px; break-after: avoid; }
+</style>
+<div class="ttl">
+  <div class="office">MEDICAL AND DENTAL CLINIC OFFICE</div>
+  <div class="loc">Maloro, Tangub City</div>
+  <div class="title">BMI RECORDS</div>
+  ${inst.isEmpty ? '' : '<div class="inst">${_h(inst)}</div>'}
+</div>
+''');
+
+    if (groups.isEmpty) {
+      body.write(_htmlMeta(dateLabel, filterLine));
+      body.write('<p style="text-align:center;margin-top:16px">'
+          '${_h(_emptyMessage())}</p>');
+    }
+    for (var i = 0; i < groups.length; i++) {
+      body.write(_htmlGroup(
+          groups[i], _ofGroup(records, groups[i]), dateLabel, filterLine,
+          first: i == 0));
+    }
+
+    return sheetDocument(
+      title: 'BMI RECORDS',
+      headerSvg: headerSvg,
+      footerSvg: footerSvg,
+      bodyHtml: body.toString(),
+      repeatHeader: true,
+    );
+  }
+
+  // ── Print: PDF document (fallback for non-web) ─────────────────────────
 
   Future<pw.Document> _buildDocument(
       {required PdfPageFormat pageFormat}) async {
@@ -2210,6 +2423,7 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
       _printTable(
         headers: _printDetailHeaders(group),
         rows: [for (final r in recs) _printDetailCells(group, r)],
+        numbered: true,
       ),
     ];
   }
@@ -2425,36 +2639,38 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
   pw.Widget _printTable({
     required List<String> headers,
     required List<List<String>> rows,
+    bool numbered = false,
   }) {
     // The PDF Times font has no en/em dash glyph (it prints as a box), so
     // use a plain hyphen in the printout.
     String safe(String s) => s.replaceAll('—', '-').replaceAll('–', '-');
+    final heads = [if (numbered) 'No.', ...headers];
     final data = rows.isEmpty
-        ? [List<String>.filled(headers.length, '')]
+        ? [List<String>.filled(heads.length, '')]
         : [
-            for (final r in rows) [for (final c in r) safe(c)],
+            for (var i = 0; i < rows.length; i++)
+              [
+                if (numbered) '${i + 1}',
+                for (final c in rows[i]) safe(c),
+              ],
           ];
     return pw.Container(
       foregroundDecoration: pw.BoxDecoration(
         border: pw.Border.all(color: PdfColors.black, width: 0.7),
       ),
       child: pw.TableHelper.fromTextArray(
-        headers: headers,
+        headers: heads,
         data: data,
         headerDecoration: const pw.BoxDecoration(color: PdfColors.white),
         headerAlignment: pw.Alignment.center,
         cellAlignment: pw.Alignment.center,
         headerStyle: pw.TextStyle(
-          fontSize: 8.5,
+          fontSize: 8,
           fontWeight: pw.FontWeight.bold,
           color: PdfColors.black,
         ),
-        cellStyle: pw.TextStyle(
-          fontSize: 8.5,
-          lineSpacing: 1.6,
-          color: PdfColors.black,
-        ),
-        cellPadding: const pw.EdgeInsets.symmetric(horizontal: 5, vertical: 4),
+        cellStyle: pw.TextStyle(fontSize: 8, color: PdfColors.black),
+        cellPadding: const pw.EdgeInsets.symmetric(horizontal: 4, vertical: 2),
         border: pw.TableBorder.symmetric(
           inside: const pw.BorderSide(color: PdfColors.black, width: 0.6),
         ),

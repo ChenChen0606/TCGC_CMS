@@ -204,6 +204,7 @@ class RecordsBookletState extends State<RecordsBooklet> {
   static final Map<String, VisitDetailsController> _savedVisits = {};
   static final Map<String, IndividualRecord> _rosterById = {};
   static final Set<String> _detailsRequested = {};
+    static final Set<String> _detailsDone = {};
   static final Map<String, int> _timeKeyCache = {};
   static String? _cacheUser;
 
@@ -239,6 +240,7 @@ class RecordsBookletState extends State<RecordsBooklet> {
     final uid = supabaseClient.auth.currentUser?.id;
     if (_cacheUser != uid) {
       // A different account signed in: never show the previous one's data.
+      _detailsDone.clear();
       _allRecords.clear();
       _procedures.clear();
       _savedVisits.clear();
@@ -352,7 +354,7 @@ class RecordsBookletState extends State<RecordsBooklet> {
     }
   }
 
-  Future<void> _fetchDetails(List<String> want) async {
+    Future<void> _fetchDetails(List<String> want) async {
     try {
       final results = await Future.wait<dynamic>([
         VisitDetailsService.readVisits(want),
@@ -371,9 +373,12 @@ class RecordsBookletState extends State<RecordsBooklet> {
         _procedures
             .removeWhere((p) => wanted.contains((p.visitId ?? '').trim()));
         _procedures.addAll(procs);
+        _detailsDone.addAll(want);
       });
     } catch (_) {
-      _detailsRequested.removeAll(want);
+      // Show the rows anyway instead of waiting forever.
+      _detailsDone.addAll(want);
+      if (mounted) setState(() {});
     }
   }
 
@@ -3574,7 +3579,11 @@ class RecordsBookletState extends State<RecordsBooklet> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _ensureDetails(idsToLoad);
     });
-
+    // Wait for the services of the visible rows, so they appear together
+    // with the table instead of popping in later.
+    if (_lastShownIds.any((i) => !_detailsDone.contains(i))) {
+      return const Center(child: CircularProgressIndicator(strokeWidth: 3));
+    }
     final isAll = type == null;
     final isStudent = type == 'Student';
     final isFaculty = type == 'Faculty';
@@ -3865,8 +3874,19 @@ class RecordsBookletState extends State<RecordsBooklet> {
                           Padding(
                             padding: const EdgeInsets.all(12),
                             child: TextButton.icon(
-                              onPressed: () =>
-                                  setState(() => _shown += _pageSize),
+                              onPressed: () async {
+                                final next = [
+                                  for (final g
+                                      in allGroups.skip(_shown).take(_pageSize))
+                                    for (final r in g)
+                                      if ((r["visitId"] ?? '').trim().isNotEmpty)
+                                        (r["visitId"] ?? '').trim(),
+                                ];
+                                await _ensureDetails(next);
+                                if (mounted) {
+                                  setState(() => _shown += _pageSize);
+                                }
+                              },
                               icon: const Icon(Icons.expand_more_rounded,
                                   color: kPrimary),
                               label: Text(

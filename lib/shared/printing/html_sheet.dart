@@ -17,8 +17,8 @@ svg { display: block; width: 100%; height: auto; overflow: visible; }
 .frame > thead { display: table-header-group; }
 .frame > tfoot { display: table-footer-group; }
 .gap { height: 12px; }
-.foot-space { width: 100%; aspect-ratio: 1545 / 120; }
-.foot { position: fixed; left: 0; right: 0; bottom: 12px; }
+.foot-space { width: 100%; aspect-ratio: 1545 / 138; margin-top: 20px; }
+.foot { position: fixed; left: 0; right: 0; bottom: 12px; width: 100%; height: auto; display: block; }
 .content { padding: 0 4%; }
 
 .ttl { text-align: center; color: #0E6B47; }
@@ -57,6 +57,14 @@ table.sub { width: 100%; border-collapse: collapse; table-layout: fixed; }
 .sig .role { text-align: center; font-size: 10pt; margin-top: 3px; }
 ''';
 
+/// Footer as an <img>: Chrome repeats it on every printed page.
+/// The viewBox is widened upward so the seal's overhang is not clipped.
+String footerDataUri(String svg) {
+  final fixed =
+      svg.replaceFirst('viewBox="0 0 1545 120"', 'viewBox="0 -18 1545 138"');
+  return 'data:image/svg+xml;base64,${base64Encode(utf8.encode(fixed))}';
+}
+
 /// Wraps [bodyHtml] with the letterhead (first page only) and the footer
 /// (pinned to the bottom of every page). Everything scales with page width.
 String sheetDocument({
@@ -64,17 +72,20 @@ String sheetDocument({
   required String headerSvg,
   required String footerSvg,
   required String bodyHtml,
-}) =>
-    '''<!DOCTYPE html>
+  bool repeatHeader = false, // true = letterhead on every page
+}) {
+  final head = '<div class="head">$headerSvg</div>';
+  return '''<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>${const HtmlEscape().convert(title)}</title>
 <style>$_css</style></head><body>
 <table class="frame">
-<thead><tr><td><div class="gap"></div></td></tr></thead>
+<thead><tr><td><div class="gap"></div>${repeatHeader ? head : ''}</td></tr></thead>
 <tbody><tr><td>
-<div class="head">$headerSvg</div>
+${repeatHeader ? '' : head}
 <div class="content">$bodyHtml</div>
 </td></tr></tbody>
 <tfoot><tr><td><div class="foot-space"></div></td></tr></tfoot>
 </table>
-<div class="foot">$footerSvg</div>
+<img class="foot" alt="" src="${footerDataUri(footerSvg)}">
 </body></html>''';
+}

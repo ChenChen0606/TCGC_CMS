@@ -8,7 +8,8 @@ import 'package:clinicmanagementsystem/features/certificates/models/certificate_
 import 'package:clinicmanagementsystem/core/theme/app_colors.dart';
 import 'package:clinicmanagementsystem/shared/printing/document_template.dart';
 import 'package:clinicmanagementsystem/shared/printing/print_service.dart';
-
+import 'package:clinicmanagementsystem/shared/printing/html_print.dart';
+import 'package:clinicmanagementsystem/shared/printing/html_certificate.dart';
 class SimplePrintPreview extends StatefulWidget {
   const SimplePrintPreview({
     super.key,
@@ -25,22 +26,35 @@ class SimplePrintPreview extends StatefulWidget {
   final List<PrintRequirement> requirements;
 
   static Future<void> show(
-    BuildContext context, {
-    required RenderedDocument document,
-    required String fileName,
-    required String title,
-    List<PrintRequirement> requirements = const <PrintRequirement>[],
-  }) {
-    return showDialog<void>(
-      context: context,
-      builder: (_) => SimplePrintPreview(
-        document: document,
-        fileName: fileName,
-        title: title,
-        requirements: requirements,
-      ),
-    );
+  BuildContext context, {
+  required RenderedDocument document,
+  required String fileName,
+  required String title,
+  List<PrintRequirement> requirements = const <PrintRequirement>[],
+}) async {
+  // Web: same as the Records Booklet, open Chrome's print dialog.
+  if (htmlPrintSupported) {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final html = await buildCertificateHtml(document);
+      await printHtml(html, title: fileName);
+    } catch (e) {
+      messenger.showSnackBar(
+        SnackBar(content: Text('Could not print the certificate: $e')),
+      );
+    }
+    return;
   }
+  return showDialog<void>(
+    context: context,
+    builder: (_) => SimplePrintPreview(
+      document: document,
+      fileName: fileName,
+      title: title,
+      requirements: requirements,
+    ),
+  );
+}
 
   @override
   State<SimplePrintPreview> createState() => _SimplePrintPreviewState();
