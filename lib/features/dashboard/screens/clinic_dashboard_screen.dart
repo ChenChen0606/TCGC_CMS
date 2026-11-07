@@ -40,6 +40,7 @@ class ClinicDashboard extends StatefulWidget {
 class _ClinicDashboardState extends State<ClinicDashboard> {
   int _selectedIndex = 0;
 
+  final Set<int> _visited = {0};
   @override
   void initState() {
     super.initState();
@@ -47,7 +48,12 @@ class _ClinicDashboardState extends State<ClinicDashboard> {
     if (browserHistoryEnabled) {
       initTabHistory((index) {
         if (index < 0 || index > _lastTabIndex) return;
-        if (mounted) setState(() => _selectedIndex = index);
+        if (mounted) {
+          setState(() {
+            _selectedIndex = index;
+            _visited.add(index);
+          });
+        }
       });
     }
   }
@@ -90,6 +96,7 @@ class _ClinicDashboardState extends State<ClinicDashboard> {
   void _onItemTapped(int index) {
     setState(() {
       _selectedIndex = index;
+      _visited.add(index);
     });
     if (browserHistoryEnabled) pushTabHistory(index);
   }
@@ -127,7 +134,10 @@ class _ClinicDashboardState extends State<ClinicDashboard> {
             Expanded(
               child: IndexedStack(
                 index: _selectedIndex,
-                children: _pages,
+                children: [
+                  for (var i = 0; i < _pages.length; i++)
+                    _visited.contains(i) ? _pages[i] : const SizedBox.shrink(),
+                ],
               ),
             ),
           ],

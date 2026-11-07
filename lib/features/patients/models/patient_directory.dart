@@ -239,7 +239,8 @@ class PatientDirectory {
   List<ClinicProfile> get all => List<ClinicProfile>.unmodifiable(_all);
 
   int get length => _all.length;
-
+  final Map<String, String> _hay = {};
+  String _hayOf(ClinicProfile p) => _hay.putIfAbsent(p.id, () => p.searchable); 
   List<ClinicProfile> search(String query, {String? category}) {
     final q = query.trim().toLowerCase();
     final pool = category == null
@@ -250,7 +251,7 @@ class PatientDirectory {
         ..sort((a, b) => a.lastName.compareTo(b.lastName));
       return list;
     }
-    final hits = pool.where((p) => p.searchable.contains(q)).toList();
+    final hits = pool.where((p) => _hayOf(p).contains(q)).toList();
     hits.sort((a, b) {
       final aExact = a.id.toLowerCase() == q ? 0 : 1;
       final bExact = b.id.toLowerCase() == q ? 0 : 1;
@@ -336,6 +337,7 @@ class PatientDirectory {
   void unsubscribe(void Function() listener) => _listeners.remove(listener);
 
   void _notify() {
+    _hay.clear();
     for (final l in List<void Function()>.of(_listeners)) {
       l();
     }

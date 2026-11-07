@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'dart:async';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 
@@ -97,6 +98,7 @@ class _ClinicVisitScreenState extends State<ClinicVisitScreen> {
   String _visitorFilter = 'All';
 
   final TextEditingController _searchCtrl = TextEditingController();
+  Timer? _searchDebounce;
   final TextEditingController _reasonForVisitCtrl = TextEditingController();
 
   ClinicProfile? _visitor;
@@ -202,6 +204,7 @@ class _ClinicVisitScreenState extends State<ClinicVisitScreen> {
 
     ReferenceCatalog.unsubscribe(_catalogListener);
     _searchCtrl.dispose();
+    _searchDebounce?.cancel();
     _reasonForVisitCtrl.dispose();
     _details?.dispose();
     super.dispose();
@@ -965,7 +968,7 @@ class _ClinicVisitScreenState extends State<ClinicVisitScreen> {
           const SizedBox(height: 10),
           _searchField(),
           const SizedBox(height: 10),
-          _cardBody(
+         /* _cardBody(
             child: results.isEmpty
                 ? _noVisitorFound()
                 : Column(
@@ -976,6 +979,15 @@ class _ClinicVisitScreenState extends State<ClinicVisitScreen> {
                         if (i < results.length - 1) const SizedBox(height: 6),
                       ],
                     ],
+                  ),
+          ),*/
+          Expanded(
+            child: results.isEmpty
+                ? _noVisitorFound()
+                : ListView.separated(
+                    itemCount: results.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 6),
+                    itemBuilder: (_, i) => _visitorRow(results[i]),
                   ),
           ),
         ],
@@ -1046,7 +1058,12 @@ class _ClinicVisitScreenState extends State<ClinicVisitScreen> {
     return TextField(
       key: const ValueKey('visitor_search_field'),
       controller: _searchCtrl,
-      onChanged: (_) => setState(() {}),
+      onChanged: (_) {
+        _searchDebounce?.cancel();
+        _searchDebounce = Timer(const Duration(milliseconds: 200), () {
+          if (mounted) setState(() {});
+        });
+      },
       style: const TextStyle(fontSize: 14, color: kTextMain),
       decoration: InputDecoration(
         hintText: "Search by ID number or name...",
