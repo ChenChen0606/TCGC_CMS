@@ -293,7 +293,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
           academic_period_id,
           academic_periods!left(acad_year, semester),
           individual_records!left(
-            fn, mn, ln, person_type,
+            fn, mn, ln, suffix, person_type,
             individual_academic_records!left(
               status,
               institutes!left(code),
@@ -343,12 +343,16 @@ class _ReportsScreenState extends State<ReportsScreen> {
           }
         }
 
-        final name = [
+       final given = [
           '${person['fn'] ?? ''}'.trim(),
           '${person['mn'] ?? ''}'.trim(),
-          '${person['ln'] ?? ''}'.trim(),
+          '${person['suffix'] ?? ''}'.trim(),
         ].where((e) => e.isNotEmpty).join(' ');
-
+        final last = '${person['ln'] ?? ''}'.trim();
+        final name = last.isEmpty
+            ? given
+            : (given.isEmpty ? last : '$last, $given');
+            
         final visitId = '${row['visit_id'] ?? ''}';
         final t = times[visitId.trim()];
         final rawTime = '${row['visit_time'] ?? ''}'.trim();

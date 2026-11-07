@@ -73,7 +73,7 @@ abstract final class WhoBmi {
     // --- 19 years and over: WHO adult cut-offs (classify the number shown)
     if (months >= 228) {
       final b = (bmi * 10).round() / 10;
-      if (b < 16) return (label: 'Severe Underweight', band: VitalBand.high); //Severe 
+      if (b < 16) return (label: 'Underweight', band: VitalBand.high); //Severe 
       if (b < 18.5) return (label: 'Underweight', band: VitalBand.watch);
       if (b < 25) return (label: 'Normal', band: VitalBand.normal);
       if (b < 30) return (label: 'Overweight', band: VitalBand.watch);
@@ -87,8 +87,8 @@ abstract final class WhoBmi {
     final lms = kWhoBmiLms[key]?[months];
     if (lms == null) return null;
     final z = _zScore(bmi, lms);
-    if (z < -3) return (label: 'Severe Thinness', band: VitalBand.high);
-    if (z < -2) return (label: 'Thinness', band: VitalBand.watch);
+    if (z < -3) return (label: 'Underweight', band: VitalBand.high);
+    if (z < -2) return (label: 'Underweight', band: VitalBand.watch);
     if (z <= 1) return (label: 'Normal', band: VitalBand.normal);
     if (z <= 2) return (label: 'Overweight', band: VitalBand.watch);
     return (label: 'Obese', band: VitalBand.high);

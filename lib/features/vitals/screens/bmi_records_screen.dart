@@ -147,11 +147,11 @@ class BmiRecord {
   }
 
   String get fullName {
-    final parts =
-        <String>[ln, fn, mn, suffix].where((p) => p.isNotEmpty).toList();
-    if (parts.isNotEmpty) return parts.join(', ');
-    return '$fn $mn $ln $suffix'.trim();
-  }
+  final given =
+      <String>[fn, mn, suffix].where((p) => p.isNotEmpty).join(' ');
+  if (ln.isEmpty) return given;
+  return given.isEmpty ? ln : '$ln, $given';
+}
 
   static DateTime? _parseTs(String? s) {
     if (s == null || s.trim().isEmpty) return null;
@@ -469,6 +469,20 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
       _selectedInstitute = 'All';
     }
   }
+      int _compareBmi(BmiRecord a, BmiRecord b) {
+        int s(String x, String y) => x.toLowerCase().compareTo(y.toLowerCase());
+        var c = s(a.ln, b.ln);
+        if (c != 0) return c;
+        c = s(a.fn, b.fn);
+        if (c != 0) return c;
+        c = s(a.mn, b.mn);
+        if (c != 0) return c;
+        c = a.personId.compareTo(b.personId);
+        if (c != 0) return c;
+        final da = a.visitDate, db = b.visitDate;
+        if (da == null || db == null) return da == null ? (db == null ? 0 : 1) : -1;
+        return db.compareTo(da); // same person: newest first
+      }
 
   void _applyFilters() {
     final q = _searchQuery.trim().toLowerCase();
@@ -503,7 +517,7 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
       }
       return true;
     }).toList();
-
+    scope.sort(_compareBmi);
     _scopeRecords = scope;
     _filteredRecords = _selectedClassification == 'All'
         ? scope

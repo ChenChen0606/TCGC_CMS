@@ -44,6 +44,9 @@ List<Map<String, String>> filterRecordsByInstitute(
   }).toList();
 }
 
+
+
+
 enum _PrintReport { service, individual, daily, byInstitute, certificate }
 
 extension _PrintReportText on _PrintReport {
@@ -381,7 +384,7 @@ class RecordsBookletState extends State<RecordsBooklet> {
         facts: {
           for (final r in roster)
             r.id: {
-              "name": r.fullName,
+              "name": _lastFirst(r),
               "type": r.category,
               "institute": r.institute,
               "program": r.program,
@@ -683,7 +686,8 @@ class RecordsBookletState extends State<RecordsBooklet> {
     }
     groups.sort((a, b) {
       final byDate = (b.first["date"] ?? '').compareTo(a.first["date"] ?? '');
-      if (byDate != 0) return byDate;
+      if (byDate != 0) return byDate; // newest date first
+      // same date: the latest recorded time goes on top
       return _timeKey(b.last["time"] ?? '')
           .compareTo(_timeKey(a.last["time"] ?? ''));
     });
@@ -1474,7 +1478,7 @@ class RecordsBookletState extends State<RecordsBooklet> {
 
   List<_PrintPerson> _printablePeople() {
     final Map<String, String> m = {};
-    _rosterById.forEach((id, p) => m[id] = p.fullName);
+    _rosterById.forEach((id, p) => m[id] = _lastFirst(p));
     for (final r in _allRecords) {
       final String pid = (r["personId"] ?? '').trim();
       final String id = pid.isNotEmpty ? pid : (r["id"] ?? '').trim();
@@ -1488,7 +1492,29 @@ class RecordsBookletState extends State<RecordsBooklet> {
     return list;
   }
 
-  List<Map<String, String>> _recordsForPrint(_PrintCriteria c) {
+    String _nameKey(Map<String, String> r) {
+    final id = _idOfRecord(r);
+    final p = _rosterById[id];
+    if (p != null && p.lastName.trim().isNotEmpty) {
+      return '${p.lastName}|${p.firstName}|${p.middleName}|$id'
+          .toLowerCase()
+          .trim();
+    }
+    return '${(r["name"] ?? '').trim()}|$id'.toLowerCase();
+  }
+
+  /// "LAST, First Middle Suffix"  (comma only after the last name)
+    String _lastFirst(IndividualRecord r) {
+      final given = [r.firstName, r.middleName, r.suffix]
+          .map((e) => e.trim())
+          .where((e) => e.isNotEmpty)
+          .join(' ');
+      final last = r.lastName.trim();
+      if (last.isEmpty) return given;
+      return given.isEmpty ? last : '$last, $given';
+    }
+
+    List<Map<String, String>> _recordsForPrint(_PrintCriteria c) {
     var list = _getPrintRecords(institute: c.institute);
 
     final DateTimeRange? w = c.window;
@@ -1526,9 +1552,18 @@ class RecordsBookletState extends State<RecordsBooklet> {
       }).toList();
     }
 
+    // Individual report: oldest-first here (BookletPrint reverses it later).
+    // All other reports: newest date first, then A-Z by last name on the same day.
+    final bool single = c.report == _PrintReport.individual;
     list.sort((a, b) {
-      final int byDate = (a["date"] ?? '').compareTo(b["date"] ?? '');
+      final String da = a["date"] ?? '';
+      final String db = b["date"] ?? '';
+      final int byDate = single ? da.compareTo(db) : db.compareTo(da);
       if (byDate != 0) return byDate;
+      if (!single) {
+        final int byName = _nameKey(a).compareTo(_nameKey(b));
+        if (byName != 0) return byName;
+      }
       return _timeKey(a["time"] ?? '').compareTo(_timeKey(b["time"] ?? ''));
     });
     return list;
@@ -1684,6 +1719,7 @@ class RecordsBookletState extends State<RecordsBooklet> {
     final p = (e["personId"] ?? '').trim();
     return p.isNotEmpty ? p : (e["id"] ?? '').trim();
   }
+
 
   List<Map<String, String>> _visitsOf(String personId) {
     final list = _allRecords

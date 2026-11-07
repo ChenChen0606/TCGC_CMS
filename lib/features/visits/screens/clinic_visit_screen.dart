@@ -300,10 +300,51 @@ class _ClinicVisitScreenState extends State<ClinicVisitScreen> {
     );
   }
 
-  List<ClinicProfile> get _results => PatientDirectory.instance.search(
-        _searchCtrl.text,
-        category: _visitorFilter == 'All' ? null : _visitorFilter,
-      );
+  List<ClinicProfile> get _results {
+  final category = _visitorFilter == 'All' ? null : _visitorFilter;
+  final tokens = _searchTokens(_searchCtrl.text);
+
+  // Empty box -> keep the old behaviour.
+  if (tokens.isEmpty) {
+    return PatientDirectory.instance.search(_searchCtrl.text,
+        category: category);
+  }
+
+  final out = PatientDirectory.instance.all
+      .where((p) =>
+          (category == null || p.category == category) &&
+          _matchesTokens(p, tokens))
+      .toList();
+  out.sort((a, b) {
+    final c = '${a.lastName}'.toLowerCase().compareTo('${b.lastName}'.toLowerCase());
+    return c != 0
+        ? c
+        : '${a.firstName}'.toLowerCase().compareTo('${b.firstName}'.toLowerCase());
+  });
+  return out;
+}
+
+/// "Santos, Maria D." / "Maria D Santos" / "D. Santos Maria" -> [santos, maria, d]
+List<String> _searchTokens(String raw) => raw
+    .toLowerCase()
+    .replaceAll(RegExp(r'[,.;]'), ' ')
+    .split(RegExp(r'\s+'))
+    .where((t) => t.isNotEmpty)
+    .toList();
+
+/// Every typed word must match somewhere in the person, in ANY order.
+/// A 1-letter word (middle initial) must match the START of a name word.
+bool _matchesTokens(ClinicProfile p, List<String> tokens) {
+  final words = '${p.firstName} ${p.middleName} ${p.lastName} ${p.suffix} ${p.id}'
+      .toLowerCase()
+      .replaceAll(RegExp(r'[,.]'), ' ')
+      .split(RegExp(r'\s+'))
+      .where((w) => w.isNotEmpty)
+      .toList();
+  final joined = words.join(' ');
+  return tokens.every((t) =>
+      t.length == 1 ? words.any((w) => w.startsWith(t)) : joined.contains(t));
+}
 
   List<ClinicPurpose> get _selectedPurposes {
     final out = <ClinicPurpose>[];
