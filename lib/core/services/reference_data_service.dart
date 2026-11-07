@@ -97,6 +97,11 @@ class ReferenceCatalog {
   static List<NamedOption> _positions = [];
 
   static bool _loaded = false;
+  static String? _lastError;
+  static String? get lastError => _lastError;
+
+  static bool get hasCoreData =>
+      _institutes.isNotEmpty && _programs.isNotEmpty;
   static bool get isLoaded => _loaded;
 
   static List<AcademicPeriodOption> get periodsNewestFirst {
@@ -268,58 +273,106 @@ class ReferenceCatalog {
     return null;
   }
 
+    static Future<List<Map<String, dynamic>>?> _fetchTable(
+      String table, List<String> errors) async {
+    try {
+      final rows = await supabaseClient.from(table).select();
+      return [for (final r in rows) Map<String, dynamic>.from(r as Map)];
+    } catch (e) {
+      errors.add('$table: $e');
+      return null;
+    }
+  }
+
   static Future<void> load({bool force = false}) async {
-    if (_loaded && !force) return;
+    if (_loaded && !force && hasCoreData) return;
 
-    if (!hasSignedInUser) return;
+    if (!hasSignedInUser) {
+      _lastError = 'Not signed in yet.';
+      return;
+    }
 
-    final results = await Future.wait([
-      supabaseClient.from('academic_periods').select(),
-      supabaseClient.from('institutes').select(),
-      supabaseClient.from('program').select(),
-      supabaseClient.from('departments_offices').select(),
-      supabaseClient.from('positions').select(),
+    final errors = <String>[];
+    final r = await Future.wait([
+      _fetchTable('academic_periods', errors),
+      _fetchTable('institutes', errors),
+      _fetchTable('program', errors),
+      _fetchTable('departments_offices', errors),
+      _fetchTable('positions', errors),
     ]);
 
-    _periods = (results[0] as List)
-        .map((r) => AcademicPeriodOption.fromSupabase(
-            Map<String, dynamic>.from(r as Map)))
-        .where((p) => p.id.isNotEmpty)
-        .toList();
-    _institutes = (results[1] as List)
-        .map((r) =>
-            InstituteOption.fromSupabase(Map<String, dynamic>.from(r as Map)))
-        .where((e) => e.id.isNotEmpty)
-        .toList();
-    _programs = (results[2] as List)
-        .map((r) =>
-            ProgramOption.fromSupabase(Map<String, dynamic>.from(r as Map)))
-        .where((e) => e.id.isNotEmpty)
-        .toList();
-    _departments = (results[3] as List)
-        .map((r) => NamedOption.fromSupabase(
-            Map<String, dynamic>.from(r as Map), 'department_office_id'))
-        .where((e) => e.id.isNotEmpty && e.name.isNotEmpty)
-        .toList();
-    _positions = (results[4] as List)
-        .map((r) => NamedOption.fromSupabase(
-            Map<String, dynamic>.from(r as Map), 'position_id'))
-        .where((e) => e.id.isNotEmpty && e.name.isNotEmpty)
-        .toList();
+    // Only overwrite a list when its query succeeded (keeps old data on failure).
+    if (r[0] != null) {
+      _periods = r[0]!
+          .map(AcademicPeriodOption.fromSupabase)
+          .where((p) => p.id.isNotEmpty)
+          .toList();
+    }
+    if (r[1] != null) {
+      _institutes = r[1]!
+          .map(InstituteOption.fromSupabase)
+          .where((e) => e.id.isNotEmpty)
+          .toList();
+    }
+    if (r[2] != null) {
+      _programs = r[2]!
+          .map(ProgramOption.fromSupabase)
+          .where((e) => e.id.isNotEmpty)
+          .toList();
+    }
+    if (r[3] != null) {
+      _departments = r[3]!
+          .map((m) => NamedOption.fromSupabase(m, 'department_office_id'))
+          .where((e) => e.id.isNotEmpty && e.name.isNotEmpty)
+          .toList();
+    }
+    if (r[4] != null) {
+      _positions = r[4]!
+          .map((m) => NamedOption.fromSupabase(m, 'position_id'))
+          .where((e) => e.id.isNotEmpty && e.name.isNotEmpty)
+          .toList();
+    }
 
-    _loaded = true;
+    if (errors.isEmpty) {
+      final empty = <String>[
+        if (_institutes.isEmpty) 'institutes',
+        if (_programs.isEmpty) 'program',
+        if (_departments.isEmpty) 'departments_offices',
+        if (_positions.isEmpty) 'positions',
+      ];
+      if (empty.isNotEmpty) {
+        errors.add('Came back empty: ${empty.join(', ')}. If these tables have '
+            'rows, this account has no SELECT permission (RLS policy).');
+      }
+    }
+
+    _lastError = errors.isEmpty ? null : errors.join('\n');
+    _loaded = errors.isEmpty;
   }
 
   static Future<void> loadQuietly() async {
-    final wasLoaded = _loaded;
+    final before = _loaded;
     try {
       await load();
-    } catch (_) {}
-    if (!wasLoaded && _loaded) _notify();
+    } catch (e) {
+      _lastError = '$e';
+    }
+    if (!before && _loaded) _notify();
+  }
+
+  /// Always (re)loads and tells listeners. Use when opening forms.
+  static Future<void> ensureLoaded({bool force = false}) async {
+    if (_loaded && hasCoreData && !force) return;
+    try {
+      await load(force: true);
+    } catch (e) {
+      _lastError = '$e';
+    }
+    _notify();
   }
 
   static Future<void> loadAfterSignIn() async {
-    if (_loaded || !hasSignedInUser) return;
+    if ((_loaded && hasCoreData) || !hasSignedInUser) return;
     try {
       await load(force: true);
     } catch (_) {

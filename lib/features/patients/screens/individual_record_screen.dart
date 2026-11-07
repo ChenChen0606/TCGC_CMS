@@ -381,10 +381,14 @@ class _IndividualRecordScreenState extends State<IndividualRecordScreen>
       ? List<String>.of(kFacultyPositions)
       : List<String>.of(kStaffPositions);
 
-  void _openForm({IndividualRecord? edit}) {
+    Future<void> _openForm({IndividualRecord? edit}) async {
     if (edit != null && edit.status == kRecordStatusInactive) {
       _showError('This record belongs to a closed term and is view-only.');
       return;
+    }
+    if (!ReferenceCatalog.hasCoreData) {
+      await ReferenceCatalog.ensureLoaded(force: true);
+      if (!mounted) return;
     }
     final category = edit?.category ?? filter;
     setState(() {
@@ -443,7 +447,11 @@ class _IndividualRecordScreenState extends State<IndividualRecordScreen>
     });
 
     if (edit == null && category != 'Student') _fillNextId(category);
-
+    ReferenceCatalog.ensureLoaded(force: true).then((_) {
+      if (!mounted) return;
+      setState(() {});
+      _refreshForm();
+    });
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -454,6 +462,7 @@ class _IndividualRecordScreenState extends State<IndividualRecordScreen>
         },
       ),
     );
+    
   }
 
   Future<void> _fillNextId(String category) async {
@@ -1281,8 +1290,11 @@ class _IndividualRecordScreenState extends State<IndividualRecordScreen>
           const SizedBox(height: 14),
           _addressField(),
         ]);
-      default:
+
+
+        default:
         return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          if (ReferenceCatalog.lastError != null) _catalogWarning(),
           _sectionHeader(
             isStudent ? Icons.school_outlined : Icons.work_outline,
             isStudent
@@ -1369,7 +1381,35 @@ class _IndividualRecordScreenState extends State<IndividualRecordScreen>
       ]),
     );
   }
-
+  Widget _catalogWarning() {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 14),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: kDanger.withValues(alpha: 0.07),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: kDanger.withValues(alpha: 0.3)),
+      ),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Icon(Icons.cloud_off_rounded, size: 16, color: kDanger),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            'Could not load the lists.\n${ReferenceCatalog.lastError}',
+            style: const TextStyle(fontSize: 12, color: kDanger),
+          ),
+        ),
+        TextButton(
+          onPressed: () async {
+            await ReferenceCatalog.ensureLoaded(force: true);
+            if (mounted) setState(() {});
+            _refreshForm();
+          },
+          child: const Text('Retry'),
+        ),
+      ]),
+    );
+  }
   Widget _sectionHeader(IconData icon, String title) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 14),
