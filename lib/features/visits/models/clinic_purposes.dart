@@ -102,7 +102,6 @@ class ClinicPurposes {
     'Right Leg',
     'Left Foot',
     'Right Foot',
-    'Other',
   ];
 
   static const List<ClinicPurpose> all = [

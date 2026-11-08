@@ -21,7 +21,25 @@ String _tableFor(String dartServiceId) => switch (dartServiceId) {
       _ => '',
     };
 
-Future<void> saveServiceRecord({
+/// Primary key column of each detail table (from the schema). Used to swap
+/// an old row for a new one without ever losing data.
+const Map<String, String> _kPrimaryKeys = {
+  'bmi_records': 'bmi_record_id',
+  'wound_dressing_records': 'wound_dressing_id',
+  'first_aid_records': 'first_aid_id',
+  'counselling_records': 'counselling_id',
+  'prenatal_records': 'prenatal_id',
+  'medical_consultations': 'consultation_id',
+  'vital_signs': 'vital_sign_id',
+};
+
+/// Saves one service. Returns true when it was written, false when it failed
+/// (the reason is printed in the debug console).
+///
+/// SAFE ORDER: the new row is written FIRST. The old row is removed only
+/// after the new one is in. Before, the old row was deleted first, so any
+/// insert error left the visit with no record at all.
+Future<bool> saveServiceRecord({
   required String visitServiceId,
   required String visitId,
   required String dartServiceId,
@@ -30,7 +48,7 @@ Future<void> saveServiceRecord({
   String? recordedBy,
 }) async {
   final table = _tableFor(dartServiceId);
-  if (table.isEmpty) return;
+  if (table.isEmpty) return true;
 
   final row = buildServiceRecord(
     dartServiceId: dartServiceId,
@@ -38,7 +56,7 @@ Future<void> saveServiceRecord({
     vitals: vitals,
     recordedBy: recordedBy,
   );
-  if (row == null) return;
+  if (row == null) return true;
 
   if (table == 'medication_services') {
     try {
@@ -57,71 +75,74 @@ Future<void> saveServiceRecord({
           ...row,
         });
       }
-    } catch (_) {}
-    return;
-  }
-
-  String? oldParentId;
-  if (dartServiceId == 'first_aid_treatment') {
-    try {
-      final old = await supabaseClient
-          .from(table)
-          .select('first_aid_id')
-          .eq('visit_service_id', visitServiceId)
-          .maybeSingle();
-      oldParentId = '${old?['first_aid_id'] ?? ''}';
-    } catch (_) {}
-    if (oldParentId != null && oldParentId.isNotEmpty) {
-      try {
-        await supabaseClient
-            .from('first_aid_conditions')
-            .delete()
-            .eq('first_aid_id', oldParentId);
-      } catch (_) {}
-      try {
-        await supabaseClient
-            .from('first_aid_treatments')
-            .delete()
-            .eq('first_aid_id', oldParentId);
-      } catch (_) {}
+      return true;
+    } catch (e) {
+      debugPrint('service detail: medication_services write failed: $e');
+      return false;
     }
   }
 
+  final pk = _kPrimaryKeys[table];
+  if (pk == null) return false;
+
+  // 1. Remember the rows that exist now (they are removed only at the end).
+  List<String> oldIds = const [];
   try {
-    await supabaseClient
+    final old = await supabaseClient
         .from(table)
-        .delete()
+        .select(pk)
         .eq('visit_service_id', visitServiceId);
+    oldIds = [
+      for (final r in old) '${Map<String, dynamic>.from(r as Map)[pk]}',
+    ];
   } catch (e) {
-    debugPrint('service detail: $table clear failed: $e');
-    return;
+    debugPrint('service detail: $table lookup failed: $e');
+    return false;
   }
 
+  // 2. Write the new row. If this fails the old row is still there.
+  Map<String, dynamic> inserted;
   try {
-    final inserted = await supabaseClient
+    final result = await supabaseClient
         .from(table)
         .insert({'visit_service_id': visitServiceId, ...row})
         .select()
         .single();
-
-    if (dartServiceId == 'first_aid_treatment') {
-      final parentId = '${inserted['first_aid_id'] ?? ''}';
-      if (parentId.isNotEmpty) {
-        await _insertFirstAidChildren(parentId, d);
-      }
-    }
+    inserted = Map<String, dynamic>.from(result as Map);
   } catch (e) {
     debugPrint('service detail: $table write failed: $e');
+    return false;
   }
+
+  // 3. First Aid keeps its findings and treatments in two child tables.
+  var ok = true;
+  if (dartServiceId == 'first_aid_treatment') {
+    final newParentId = '${inserted['first_aid_id'] ?? ''}';
+    if (newParentId.isNotEmpty) {
+      ok = await _insertFirstAidChildren(newParentId, d);
+    }
+  }
+
+  // 4. Only now remove the old row(s). The child rows of an old First Aid
+  //    row go with it (ON DELETE CASCADE in the schema).
+  final stale = oldIds.where((id) => id.isNotEmpty && id != 'null').toList();
+  if (stale.isNotEmpty) {
+    try {
+      await supabaseClient.from(table).delete().inFilter(pk, stale);
+    } catch (e) {
+      debugPrint('service detail: $table old row cleanup failed: $e');
+    }
+  }
+  return ok;
 }
 
-Future<void> _insertFirstAidChildren(
+Future<bool> _insertFirstAidChildren(
   String firstAidId,
   ServiceDraft d,
 ) async {
-  final conditions = _jsonList(d, 'findings');
-  final treatments = _jsonList(d, 'treatment');
-  if (conditions.isEmpty && treatments.isEmpty) return;
+  final conditions = _answersWithOther(d, 'findings');
+  final treatments = _answersWithOther(d, 'treatment');
+  if (conditions.isEmpty && treatments.isEmpty) return true;
 
   try {
     if (conditions.isNotEmpty) {
@@ -136,7 +157,11 @@ Future<void> _insertFirstAidChildren(
           {'first_aid_id': firstAidId, 'treatment_type': t},
       ]);
     }
-  } catch (_) {}
+    return true;
+  } catch (e) {
+    debugPrint('service detail: first aid child rows failed: $e');
+    return false;
+  }
 }
 
 Future<void> deleteServiceRecord({
@@ -216,7 +241,7 @@ Map<String, dynamic>? buildServiceRecord({
   String? recordedBy,
 }) {
   switch (dartServiceId) {
-        case 'bpi':
+    case 'bpi':
       final bmiValue = vitals.bmi;
       return {
         'height_cm': _vitalNum(vitals.heightCm),
@@ -282,15 +307,20 @@ Map<String, dynamic>? buildServiceRecord({
         'body_location':
             _choiceWithOtherOrNull(d, 'body_part', ClinicPurposes.bodySites),
         'pain_level': _textOrNull(d, 'pain_level'),
-        'head_injury_signs': _listOrNull(d, 'head_injury_signs'),
+        'head_injury_signs': _listWithOtherOrNull(d, 'head_injury_signs'),
         'consciousness': _choice(d, 'consciousness'),
         'dressing_material': _choiceWithOtherOrNull(
             d, 'dressing_material', kDressingMaterialsUsed),
         'dressing_other': _otherTextOrNull(d, 'dressing_material'),
+        // The typed "Other" for findings / treatments is also kept in the
+        // two columns the table already has for it.
+        'finding_other': _otherListTextOrNull(d, 'findings'),
+        'treatment_other': _otherListTextOrNull(d, 'treatment'),
         'medication_given': _textOrNull(d, 'medication_given'),
         'observation_minutes': observation?.round(),
         'condition_after_treatment': _textOrNull(d, 'condition_after'),
-        'disposition': _choice(d, 'disposition'),
+        'disposition':
+            _choiceWithOtherOrNull(d, 'disposition', kFirstAidDispositions),
         'guardian_informed': _choice(d, 'guardian_informed'),
         'sent_to': referredToWhere ?? _textOrNull(d, 'sent_to'),
         'follow_up_date': _dateOrNull(d, 'follow_up_date'),
@@ -309,13 +339,14 @@ Map<String, dynamic>? buildServiceRecord({
       final referredTo = _textOrNull(d, 'referred_to');
       final serviceReason = _textOrNull(d, 'referral_reason');
       return {
-        'topic': _listOrNull(d, 'topic'),
+        'topic': _listWithOtherOrNull(d, 'topic'),
         'other_topic': _textOrNull(d, 'topic_other'),
         'reason_or_concern': _textOrNull(d, 'reason'),
-        'counselling_provided': _listOrNull(d, 'provided'),
+        'counselling_provided': _listWithOtherOrNull(d, 'provided'),
         'other_provided': _textOrNull(d, 'provided_other'),
         'counsellor_name': _textOrNull(d, 'counsellor'),
-        'referral_source': _choice(d, 'referral_source'),
+        'referral_source': _choiceWithOtherOrNull(
+            d, 'referral_source', kCounsellingReferralSource),
         'session_type': _choice(d, 'session_type'),
         'session_date': d.text('session_date').trim().isEmpty
             ? null
@@ -323,7 +354,7 @@ Map<String, dynamic>? buildServiceRecord({
         'duration_minutes': _numOrNull(d, 'duration_minutes')?.round(),
         'understanding': _choice(d, 'understanding'),
         'student_response': _textOrNull(d, 'student_response'),
-        'concern_signs': _listOrNull(d, 'concern_signs'),
+        'concern_signs': _listWithOtherOrNull(d, 'concern_signs'),
         'guardian_informed': _choice(d, 'guardian_informed'),
         'privacy_level': counsellingPrivacyLevel(d.data),
         'needs_referral': counsellingReasons.isNotEmpty,
@@ -332,7 +363,8 @@ Map<String, dynamic>? buildServiceRecord({
         'follow_up_needed': _choice(d, 'follow_up_needed'),
         'follow_up_date': _dateOrNull(d, 'follow_up_date'),
         'follow_up_reason': _textOrNull(d, 'follow_up_reason'),
-        'additional_service_needed': _choice(d, 'additional_service_needed'),
+        'additional_service_needed':
+            _choice(d, 'additional_service_needed') ?? 'No',
         'additional_service_name': _choiceWithOtherOrNull(
             d, 'referral_service', kCounsellingRecommendedServices),
         'additional_service_reason':
@@ -340,13 +372,24 @@ Map<String, dynamic>? buildServiceRecord({
         'notes': _textOrNull(d, 'notes'),
       };
     case 'prenatal':
+      final lmpIso = _dateOrNull(d, 'lmp');
+      final lmpDate = lmpIso == null ? null : DateTime.tryParse(lmpIso);
+      final bp = (vitals.systolic != null && vitals.diastolic != null)
+          ? '${vitals.systolic}/${vitals.diastolic}'
+          : null;
       return {
         'gravida': _textOrNull(d, 'gravida'),
         'para': _textOrNull(d, 'para'),
-        'lmp': _dateOrNull(d, 'lmp'),
+        'lmp': lmpIso,
         'lmp_unknown': _hasChosen(d, 'lmp_unknown', 'Unknown') ? true : null,
-        'edd': _textOrNull(d, 'edd'),
-        'gestational_age': _textOrNull(d, 'aog'),
+        // EDD and age of gestation are calculated from the LMP. They were
+        // never stored in the form data before, so they always saved empty.
+        'edd': lmpDate == null
+            ? null
+            : _isoDate(lmpDate
+                .add(const Duration(days: VisitServiceForms.pregnancyDays))),
+        'gestational_age': _gestationalAge(lmpDate),
+        'blood_pressure': bp,
         'fundal_height_cm': _numOrNull(d, 'fundal_height'),
         'fetal_heart_rate': _numOrNull(d, 'fetal_heart_tone'),
         'fetal_heart_not_done':
@@ -354,24 +397,26 @@ Map<String, dynamic>? buildServiceRecord({
                 ? true
                 : null,
         'fetal_movement': _textOrNull(d, 'fetal_movement'),
-        'edema': _choice(d, 'edema'),
+        'edema': _choiceWithOtherOrNull(d, 'edema', kPrenatalEdema),
         'urine_protein': _choice(d, 'urine_protein'),
         'danger_signs': _listWithOtherOrNull(d, 'danger_signs'),
         'care_elsewhere': _textOrNull(d, 'care_elsewhere'),
         'care_elsewhere_place': _textOrNull(d, 'care_elsewhere_place'),
-        'service_provided': _listOrNull(d, 'service_provided'),
-        'other_service_specify': _textOrNull(d, 'other_service_specify'),
+        // The typed "Other" replaces the word "Other" in the saved list.
+        'service_provided': _listWithOtherOrNull(d, 'service_provided',
+            otherKey: 'other_service_specify'),
         'given_this_visit': _listWithOtherOrNull(d, 'given_this_visit'),
         'assessment': vitals.bloodPressure?.category,
         'action_taken': _listWithOtherOrNull(d, 'action_taken'),
         'referred_to': _textOrNull(d, 'referred_to'),
         'follow_up_date': _dateOrNull(d, 'follow_up_date'),
-        'needs_referral': prenatalNeedsReferral(vitals) ? true : null,
+        'needs_referral': prenatalNeedsReferral(vitals),
         'notes': _textOrNull(d, 'notes'),
       };
     case 'medication':
       return {
-        'reason': _listOrNull(d, 'reason_common'),
+        'reason': _listWithOtherOrNull(d, 'reason_common',
+            otherKey: 'reason_other'),
         'notes': _textOrNull(d, 'reason_other'),
       };
     case 'medicine_consultation':
@@ -387,31 +432,36 @@ Map<String, dynamic>? buildServiceRecord({
         'history_of_present_illness': _textOrNull(d, 'history_details'),
         'physical_examination': _textOrNull(d, 'physical_exam'),
         'assessment': _textOrNull(d, 'clinical_impression'),
-        'treatment_management': _listOrNull(d, 'treatment'),
+        'treatment_management': _listWithOtherOrNull(d, 'treatment'),
         'follow_up_needed': _choice(d, 'follow_up_needed'),
         'follow_up_date': _dateOrNull(d, 'follow_up_date'),
-        'referral_needed': _choice(d, 'referral_needed'),
+        'referral_needed': kConsultationReferralDispositions
+                .contains(_choice(d, 'disposition') ?? '')
+            ? 'Yes'
+            : 'No',
         'referral_reason': _textOrNull(d, 'referral_reason'),
-        'attending': _textOrNull(d, 'attending'),
+        'attending': _choiceWithOtherOrNull(d, 'attending', kAttendingStaff),
         'notes': _textOrNull(d, 'notes'),
-        'common_complaints': _listOrNull(d, 'symptoms'),
+        'common_complaints': _listWithOtherOrNull(d, 'symptoms',
+            otherKey: 'symptom_other'),
         'other_complaint': _textOrNull(d, 'symptom_other'),
         'duration_onset':
             durationParts.isEmpty ? null : durationParts.join(', '),
         'additional_complaint': _textOrNull(d, 'additional_complaint'),
-        'history_symptoms': _listOrNull(d, 'history'),
-        'other_history': _otherTextOrNull(d, 'history'),
+        'history_symptoms': _listWithOtherOrNull(d, 'history'),
+        'other_history': _otherListTextOrNull(d, 'history'),
         'history_details': _textOrNull(d, 'history_details'),
         'secondary_diagnosis': _textOrNull(d, 'secondary_diagnosis'),
-        'red_flags': _listOrNull(d, 'red_flags'),
-        'treatment_provided': _listOrNull(d, 'treatment'),
-        'other_treatment': _otherTextOrNull(d, 'treatment'),
+        'red_flags': _listWithOtherOrNull(d, 'red_flags'),
+        'treatment_provided': _listWithOtherOrNull(d, 'treatment'),
+        'other_treatment': _otherListTextOrNull(d, 'treatment'),
         'treatment_details': _textOrNull(d, 'management_details'),
         'medication_service_required':
             (_choice(d, 'medication_service_needed') == 'Yes'),
         'medication_intended': _textOrNull(d, 'medication_summary'),
         'rest_minutes': _numOrNull(d, 'rest_minutes')?.toInt(),
-        'disposition': _choice(d, 'disposition'),
+        'disposition': _choiceWithOtherOrNull(
+            d, 'disposition', kConsultationDispositions),
         'sent_home_with': _textOrNull(d, 'sent_home_with'),
         'guardian_informed': _choice(d, 'guardian_informed'),
         'follow_up_instructions': _textOrNull(d, 'follow_up_instructions'),
@@ -481,7 +531,7 @@ Map<String, dynamic>? buildServiceRecord({
 
 /// Loads the saved answers of many visit services.
 ///
-/// The eight detail tables (and the two first-aid child tables) are now
+/// The eight detail tables (and the two first-aid child tables) are
 /// queried at the SAME TIME instead of one after the other.
 Future<Map<String, Map<String, dynamic>>> loadServiceRecords(
     List<String> visitServiceIds) async {
@@ -655,7 +705,8 @@ void applyServiceRecordTo({
           data, 'body_part', row['body_location'], ClinicPurposes.bodySites,
           dropdown: true);
       _setStr(data, 'pain_level', row['pain_level']);
-      _readList(data, 'head_injury_signs', row['head_injury_signs']);
+      _readListWithOther(data, 'head_injury_signs', row['head_injury_signs'],
+          kFirstAidHeadSigns);
       _readList(data, 'consciousness', row['consciousness']);
       _readChoiceWithOther(data, 'dressing_material', row['dressing_material'],
           kDressingMaterialsUsed,
@@ -663,7 +714,8 @@ void applyServiceRecordTo({
       _setStr(data, 'medication_given', row['medication_given']);
       _setNum(data, 'observation_minutes', row['observation_minutes']);
       _setStr(data, 'condition_after', row['condition_after_treatment']);
-      _readList(data, 'disposition', row['disposition']);
+      _readChoiceWithOther(
+          data, 'disposition', row['disposition'], kFirstAidDispositions);
       _readList(data, 'guardian_informed', row['guardian_informed']);
 
       if (isReferralDisposition('${row['disposition'] ?? ''}'.trim())) {
@@ -673,24 +725,31 @@ void applyServiceRecordTo({
       }
       _setStr(data, 'follow_up_date', row['follow_up_date']);
       _setStr(data, 'referral_reason', row['referral_reason']);
-      _readList(data, 'findings', row['_conditions']);
-      _readList(data, 'treatment', row['_treatments']);
+      _readListWithOther(
+          data, 'findings', row['_conditions'], kFirstAidFindings);
+      _fillOtherFromColumn(data, 'findings', row['finding_other']);
+      _readListWithOther(
+          data, 'treatment', row['_treatments'], kFirstAidTreatments);
+      _fillOtherFromColumn(data, 'treatment', row['treatment_other']);
       _setStr(data, 'notes', row['notes']);
     case 'health_counselling':
-      _readList(data, 'topic', row['topic']);
+      _readListWithOther(data, 'topic', row['topic'], kCounsellingTopics);
       _setStr(data, 'topic_other', row['other_topic']);
       _setStr(data, 'reason', row['reason_or_concern']);
-      _readList(data, 'provided', row['counselling_provided']);
+      _readListWithOther(
+          data, 'provided', row['counselling_provided'], kCounsellingProvided);
       _setStr(data, 'provided_other', row['other_provided']);
       _setStr(data, 'counsellor', row['counsellor_name']);
 
-      _readList(data, 'referral_source', row['referral_source']);
+      _readChoiceWithOther(data, 'referral_source', row['referral_source'],
+          kCounsellingReferralSource);
       _readList(data, 'session_type', row['session_type']);
       _setStr(data, 'session_date', row['session_date']);
       _setNum(data, 'duration_minutes', row['duration_minutes']);
       _readList(data, 'understanding', row['understanding']);
       _setStr(data, 'student_response', row['student_response']);
-      _readList(data, 'concern_signs', row['concern_signs']);
+      _readListWithOther(data, 'concern_signs', row['concern_signs'],
+          kCounsellingConcernSigns);
       _readList(data, 'guardian_informed', row['guardian_informed']);
       _readList(data, 'privacy_level', row['privacy_level']);
       _readList(data, 'follow_up_needed', row['follow_up_needed']);
@@ -712,22 +771,23 @@ void applyServiceRecordTo({
       if (row['lmp_unknown'] == true) {
         _readList(data, 'lmp_unknown', ['Unknown']);
       }
-      _setStr(data, 'edd', row['edd']);
-      _setStr(data, 'aog', row['gestational_age']);
-      _setStr(data, 'fundal_height', row['fundal_height_cm']);
+      // EDD and age of gestation are worked out on screen from the LMP, so
+      // they are not loaded back into the form data.
+      _setNum(data, 'fundal_height', row['fundal_height_cm']);
       _setNum(data, 'fetal_heart_tone', row['fetal_heart_rate']);
       if (row['fetal_heart_not_done'] == true) {
         _readList(data, 'fetal_heart_not_done', ['Not done / no equipment']);
       }
       _setStr(data, 'fetal_movement', row['fetal_movement']);
-      _readList(data, 'edema', row['edema']);
+      _readChoiceWithOther(data, 'edema', row['edema'], kPrenatalEdema);
       _readList(data, 'urine_protein', row['urine_protein']);
       _readListWithOther(
           data, 'danger_signs', row['danger_signs'], kPrenatalDangerSigns);
       _setStr(data, 'care_elsewhere', row['care_elsewhere']);
       _setStr(data, 'care_elsewhere_place', row['care_elsewhere_place']);
-      _readList(data, 'service_provided', row['service_provided']);
-      _setStr(data, 'other_service_specify', row['other_service_specify']);
+      _readListWithOther(
+          data, 'service_provided', row['service_provided'], kPrenatalServices,
+          otherKey: 'other_service_specify');
       _readListWithOther(
           data, 'given_this_visit', row['given_this_visit'], kPrenatalGiven);
       _setStr(data, 'bp_assessment', row['assessment']);
@@ -737,13 +797,17 @@ void applyServiceRecordTo({
       _setStr(data, 'follow_up_date', row['follow_up_date']);
       _setStr(data, 'notes', row['notes']);
     case 'medication':
-      _readList(data, 'reason_common', row['reason']);
+      _readListWithOther(data, 'reason_common', row['reason'],
+          kMedicationReasons,
+          otherKey: 'reason_other');
 
       _setStr(data, 'reason_other', _medicationReasonOther(row['notes']));
     case 'medicine_consultation':
       _setStr(data, 'chief_complaint', row['chief_complaint']);
 
-      _readList(data, 'symptoms', row['common_complaints']);
+      _readListWithOther(
+          data, 'symptoms', row['common_complaints'], kConsultationComplaints,
+          otherKey: 'symptom_other');
       _setStr(data, 'symptom_other', row['other_complaint']);
 
       final dur = row['duration_onset']?.toString() ?? '';
@@ -773,16 +837,21 @@ void applyServiceRecordTo({
         }
       }
       _setStr(data, 'additional_complaint', row['additional_complaint']);
-      _readList(data, 'history', row['history_symptoms']);
+      _readListWithOther(
+          data, 'history', row['history_symptoms'], kConsultationHistory);
       _setStr(data, 'history_other', row['other_history']);
       _setStr(data, 'history_details',
           row['history_details'] ?? row['history_of_present_illness']);
       _setStr(data, 'physical_exam', row['physical_examination']);
       _setStr(data, 'clinical_impression', row['assessment']);
       _setStr(data, 'secondary_diagnosis', row['secondary_diagnosis']);
-      _readList(data, 'red_flags', row['red_flags']);
-      _readList(data, 'treatment',
-          row['treatment_provided'] ?? row['treatment_management']);
+      _readListWithOther(
+          data, 'red_flags', row['red_flags'], kConsultationRedFlags);
+      _readListWithOther(
+          data,
+          'treatment',
+          row['treatment_provided'] ?? row['treatment_management'],
+          kConsultationTreatment);
       _setStr(data, 'treatment_other', row['other_treatment']);
       _setStr(data, 'management_details', row['treatment_details']);
       if (row['medication_service_required'] == true) {
@@ -793,7 +862,8 @@ void applyServiceRecordTo({
       _setStr(data, 'medication_summary', row['medication_intended']);
       _setNum(data, 'rest_minutes', row['rest_minutes']);
 
-      _readList(data, 'disposition', row['disposition']);
+      _readChoiceWithOther(
+          data, 'disposition', row['disposition'], kConsultationDispositions);
       _setStr(data, 'sent_home_with', row['sent_home_with']);
       _readList(data, 'guardian_informed', row['guardian_informed']);
       _readList(data, 'follow_up_needed', row['follow_up_needed']);
@@ -809,7 +879,8 @@ void applyServiceRecordTo({
       _setStr(data, 'referral_service', row['referral_service']);
       _setStr(data, 'referred_to', row['referred_to']);
       _setStr(data, 'referral_reason', row['referral_reason']);
-      _setStr(data, 'attending', row['attending']);
+      _readChoiceWithOther(data, 'attending', row['attending'], kAttendingStaff,
+          dropdown: true);
       _setStr(data, 'notes', row['notes']);
     case 'vital_signs':
       _setNum(data, 'systolic', row['systolic']);
@@ -939,6 +1010,23 @@ String? _otherTextOrNull(ServiceDraft d, String key) {
   return other.isEmpty ? null : other;
 }
 
+/// Typed "Other" text for a tick-box list. Works wherever "Other" sits in
+/// the ticked list (the single-choice helper above only checks the first).
+String? _otherListTextOrNull(ServiceDraft d, String key, {String? otherKey}) {
+  if (!_hasChosen(d, key, kOtherLabel)) return null;
+  final other = d.text(otherKey ?? '${key}_other').trim();
+  return other.isEmpty ? null : other;
+}
+
+/// The ticked answers, with "Other" replaced by what was typed.
+List<String> _answersWithOther(ServiceDraft d, String key) {
+  final other = d.text('${key}_other').trim();
+  return [
+    for (final e in _jsonList(d, key))
+      if (e == kOtherLabel && other.isNotEmpty) other else e,
+  ];
+}
+
 String? _medicinesOrNull(ServiceDraft d) {
   if (d.medicines.isEmpty) return null;
   return jsonEncode([
@@ -957,15 +1045,30 @@ String? _listOrNull(ServiceDraft d, String key) {
   return null;
 }
 
-String? _listWithOtherOrNull(ServiceDraft d, String key) {
+/// A tick-box list where the word "Other" is replaced by what the nurse
+/// typed. [otherKey] is the box the typed answer lives in (defaults to
+/// "<key>_other"). If nothing was typed, "Other" stays so nothing is lost.
+String? _listWithOtherOrNull(ServiceDraft d, String key, {String? otherKey}) {
   final v = d.data[key];
   if (v is! List || v.isEmpty) return null;
-  final other = d.text('${key}_other').trim();
+  final other = d.text(otherKey ?? '${key}_other').trim();
   final out = <String>[
     for (final e in v)
       if ('$e' == 'Other' && other.isNotEmpty) other else '$e',
   ];
   return jsonEncode(out);
+}
+
+String _isoDate(DateTime d) => '${d.year.toString().padLeft(4, '0')}-'
+    '${d.month.toString().padLeft(2, '0')}-'
+    '${d.day.toString().padLeft(2, '0')}';
+
+/// "21w 1d", the same way the form shows it.
+String? _gestationalAge(DateTime? lmp) {
+  if (lmp == null) return null;
+  final days = DateTime.now().difference(lmp).inDays;
+  if (days < 0) return null;
+  return '${days ~/ 7}w ${days % 7}d';
 }
 
 String? _medicationReasonOther(Object? value) {
@@ -1092,12 +1195,19 @@ void _readList(Map<String, dynamic> data, String key, Object? value) {
   data[key] = [s];
 }
 
+/// Reads a saved tick-box list back into the form.
+/// - Anything that is one of [options] is ticked.
+/// - Anything else was typed under "Other": "Other" is ticked and the typed
+///   text goes into the "Other" box ([otherKey], default "<key>_other").
+/// - A plain "Other" (older rows) just ticks "Other"; it is no longer
+///   mistaken for typed text.
 void _readListWithOther(
   Map<String, dynamic> data,
   String key,
   Object? value,
-  List<String> options,
-) {
+  List<String> options, {
+  String? otherKey,
+}) {
   final stored = _decodeList(value);
   if (stored.isEmpty) return;
   final ticks = <String>[];
@@ -1105,6 +1215,10 @@ void _readListWithOther(
   for (final e in stored) {
     final a = e.trim();
     if (a.isEmpty) continue;
+    if (a == kOtherLabel) {
+      if (!ticks.contains(kOtherLabel)) ticks.add(kOtherLabel);
+      continue;
+    }
     if (options.contains(a)) {
       ticks.add(a);
     } else {
@@ -1112,10 +1226,21 @@ void _readListWithOther(
     }
   }
   if (custom.isNotEmpty) {
-    ticks.add('Other');
-    data['${key}_other'] = custom.join(', ');
+    if (!ticks.contains(kOtherLabel)) ticks.add(kOtherLabel);
+    data[otherKey ?? '${key}_other'] = custom.join(', ');
   }
   data[key] = ticks;
+}
+
+/// For rows saved with a plain "Other": fill the typed text from the
+/// dedicated column (e.g. first_aid_records.finding_other) when the form
+/// has none yet.
+void _fillOtherFromColumn(
+    Map<String, dynamic> data, String key, Object? column) {
+  final ticked = data[key];
+  if (ticked is! List || !ticked.contains(kOtherLabel)) return;
+  if ('${data['${key}_other'] ?? ''}'.trim().isNotEmpty) return;
+  _setStr(data, '${key}_other', column);
 }
 
 void _readChoiceWithOther(

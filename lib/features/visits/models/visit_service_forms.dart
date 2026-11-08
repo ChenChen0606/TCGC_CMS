@@ -98,6 +98,7 @@ class ServiceField {
     this.unit,
     this.hint,
     this.options = const [],
+    this.optionsBuilder,
     this.required = false,
     this.vital,
     this.captureVitals = const [],
@@ -115,6 +116,8 @@ class ServiceField {
     this.opensService,
     this.buttonLabel,
     this.linkFromKey,
+    this.otherOption = true,
+    this.otherKey,
   });
 
   final String key;
@@ -129,6 +132,15 @@ class ServiceField {
 
   final List<String> options;
 
+  /// Picks the options from the answers so far, so a form only offers
+  /// what fits the case. `options` is the full list (used as the fallback).
+  final List<String> Function(Map<String, dynamic> data)? optionsBuilder;
+
+  List<String> optionsIn(Map<String, dynamic> data) =>
+      optionsBuilder?.call(data) ?? options;
+
+  /// Suggested. The box is highlighted until it is filled, but nothing is
+  /// blocked when it is left empty.
   final bool required;
 
   final VitalField? vital;
@@ -163,6 +175,24 @@ class ServiceField {
 
   final String? linkFromKey;
 
+  /// Choice boxes (dropdown, chips, tick-boxes) get an "Other" choice at the
+  /// end of the list. Picking it opens a box to type the answer. Set this to
+  /// false for yes/no and fixed-scale answers where "Other" makes no sense.
+  final bool otherOption;
+
+  /// Where the typed "Other" answer is kept. Defaults to '<key>_other'.
+  final String? otherKey;
+
+  String get otherFieldKey => otherKey ?? '${key}_other';
+
+  bool get isChoiceKind =>
+      kind == ServiceFieldKind.dropdown ||
+      kind == ServiceFieldKind.chips ||
+      kind == ServiceFieldKind.multiselect ||
+      kind == ServiceFieldKind.checkboxes;
+
+  bool get hasOtherChoice => otherOption && isChoiceKind && options.isNotEmpty;
+
   bool isShownIn(Map<String, dynamic> data) {
     final predicate = shownWhenPredicate;
     if (predicate != null) return predicate(data);
@@ -179,8 +209,21 @@ class ServiceField {
     };
   }
 
-  bool isRequiredIn(Map<String, dynamic> data) =>
+  /// The box is suggested. It is highlighted green until it has an answer,
+  /// but leaving it empty never stops the nurse.
+  bool isSuggestedIn(Map<String, dynamic> data) =>
       required && isShownIn(data) && (requiredWhen?.call(data) ?? true);
+
+  /// Blocks only when something was typed that is not allowed (for example
+  /// a pain score of 15). An empty box never blocks.
+  bool isRequiredIn(Map<String, dynamic> data) {
+    if (!isShownIn(data)) return false;
+    final v = data[key];
+    final filled = v != null &&
+        !(v is String && v.trim().isEmpty) &&
+        !(v is List && v.isEmpty);
+    return filled && validate?.call(v) != null;
+  }
 }
 
 enum FieldCondition {
@@ -240,6 +283,7 @@ class ServiceFormSpec {
     this.referralReasons,
     this.referralTitle,
     this.warnings,
+    this.allowOther = true,
   });
 
   final String serviceId;
@@ -256,6 +300,18 @@ class ServiceFormSpec {
   final List<String> Function(Map<String, dynamic> data, VisitVitals vitals)?
       warnings;
 
+  /// False for BMI and Vital Signs, which never get an "Other" choice.
+  final bool allowOther;
+
+  bool offersOther(ServiceField f) => allowOther && f.hasOtherChoice;
+
+  /// The choices a box shows, with "Other" added at the end when it applies.
+  List<String> optionsFor(ServiceField f, Map<String, dynamic> data) {
+    final base = f.optionsIn(data);
+    if (!offersOther(f) || base.contains(kOtherLabel)) return base;
+    return [...base, kOtherLabel];
+  }
+
   List<String> get requiredKeys => [
         for (final s in slides) ...[
           ...s.fields.where((f) => f.required).map((f) => f.key),
@@ -263,25 +319,31 @@ class ServiceFormSpec {
         ],
       ];
 
-  List<String> requiredKeysIn(Map<String, dynamic> data) => [
+  /// Boxes that are highlighted green until they are filled. Never blocks.
+  List<String> suggestedKeysIn(Map<String, dynamic> data) => [
         for (final s in slides) ...[
-          ...s.fields.where((f) => f.isRequiredIn(data)).map((f) => f.key),
+          ...s.fields.where((f) => f.isSuggestedIn(data)).map((f) => f.key),
           ...?s.custom?.requiredKeys,
         ],
       ];
 
+  /// Boxes that block, and only because the typed answer is not allowed.
+  /// An empty box is never in this list.
+  List<String> requiredKeysIn(Map<String, dynamic> data) => [
+        for (final s in slides)
+          ...s.fields.where((f) => f.isRequiredIn(data)).map((f) => f.key),
+        ...?crossValidate?.call(data).keys,
+      ];
+
+  /// A service counts as done when something was recorded and nothing typed
+  /// is wrong. Empty suggested boxes do not stop it.
   bool isAnswered(Map<String, dynamic> data) {
-    final needed = requiredKeysIn(data);
-    if (needed.isEmpty) {
-      return data.entries.any((e) => '${e.value}'.trim().isNotEmpty);
-    }
-    return needed.every((k) {
-      final v = data[k];
-      final empty = v == null ||
-          (v is String && v.trim().isEmpty) ||
-          (v is List && v.isEmpty);
-      if (empty) return false;
-      return validateInContext(k, data) == null;
+    if (requiredKeysIn(data).isNotEmpty) return false;
+    return data.entries.any((e) {
+      final v = e.value;
+      if (v == null) return false;
+      if (v is List) return v.isNotEmpty;
+      return '$v'.trim().isNotEmpty;
     });
   }
 
@@ -351,14 +413,6 @@ ServiceFieldValidator _painWholeScore() => (value) {
       return null;
     };
 
-ServiceFieldValidator _woundMeasurement() => (value) {
-      if (value == null || '$value'.trim().isEmpty) return null;
-      final n = num.tryParse('$value'.trim());
-      if (n == null || n <= 0) return 'Enter a size greater than 0 cm.';
-      if (n > 100) return 'Enter a size of 100 cm or less.';
-      return null;
-    };
-
 ServiceFieldValidator _cappedLength(int max, String what) => (value) {
       final s = value == null ? '' : '$value'.trim();
       if (s.length <= max) return null;
@@ -380,7 +434,6 @@ const List<String> kConsultationComplaints = [
   'Nosebleed',
   'Allergy / Rash',
   'Stomach Upset',
-  'Other',
 ];
 
 const List<String> kConsultationDuration = [
@@ -403,7 +456,6 @@ const List<String> kConsultationHistory = [
   'Allergy to medicine',
   'Asthma / known condition',
   'Taking medicine now',
-  'Other',
 ];
 
 const List<String> kConsultationTreatment = [
@@ -411,7 +463,6 @@ const List<String> kConsultationTreatment = [
   'Medication',
   'Wound Care',
   'Rest / Observation',
-  'Other',
 ];
 
 const List<String> kConsultationRedFlags = [
@@ -482,7 +533,6 @@ const List<String> kCounsellingTopics = [
   'Substance Use (smoking, vaping, alcohol)',
   'Stress / Exam Anxiety',
   'Sleep',
-  'Other',
 ];
 
 const Set<String> kCounsellingSensitiveTopics = {
@@ -582,9 +632,13 @@ List<String> counsellingConcernSigns(Map<String, dynamic> data) {
 
 List<String> counsellingReferralReasons(Map<String, dynamic> data) {
   final signs = counsellingConcernSigns(data);
+  final other = _strOf(data['concern_signs_other']);
   return [
     for (final s in signs)
-      if (kCounsellingReferralSigns.contains(s)) s
+      if (kCounsellingReferralSigns.contains(s))
+        s
+      else if (s == kOtherLabel)
+        (other.isEmpty ? 'Other warning sign' : other),
   ];
 }
 
@@ -604,10 +658,14 @@ String counsellingPrivacyLevel(Map<String, dynamic> data) {
   return chosen == 'Restricted' ? 'Restricted' : 'Normal';
 }
 
-List<String> consultationRedFlags(Map<String, dynamic> data) => [
-      for (final f in _strListOf(data['red_flags']))
-        if (f != 'None') f,
-    ];
+List<String> consultationRedFlags(Map<String, dynamic> data) {
+  final other = _strOf(data['red_flags_other']);
+  return [
+    for (final f in _strListOf(data['red_flags']))
+      if (f != 'None')
+        (f == kOtherLabel && other.isNotEmpty) ? other : f,
+  ];
+}
 
 const Set<String> kConsultationDizzinessComplaints = {
   'Dizziness',
@@ -753,7 +811,6 @@ const List<String> kCounsellingProvided = [
   'Lifestyle / Behavior Advice',
   'Demonstration',
   'Medication-related Education',
-  'Other',
 ];
 
 const List<String> kAttendingStaff = [
@@ -770,7 +827,6 @@ const List<String> kWoundTypes = [
   'Burn',
   'Animal bite',
   'Blister',
-  'Other',
 ];
 
 const List<String> kWoundConditions = [
@@ -778,7 +834,6 @@ const List<String> kWoundConditions = [
   'Contaminated / Dirty',
   'Infected',
   'Healing',
-  'Other',
 ];
 
 const List<String> kWoundCleaningPerformed = [
@@ -788,7 +843,6 @@ const List<String> kWoundCleaningPerformed = [
   'Chlorhexidine',
   'Hydrogen Peroxide',
   'Tap water',
-  'Other',
 ];
 
 const List<String> kWoundDressingMaterials = [
@@ -798,7 +852,6 @@ const List<String> kWoundDressingMaterials = [
   'Crepe Bandage',
   'Adhesive Plaster',
   'Cotton / Cotton Ball',
-  'Other',
 ];
 
 const List<String> kDressingMaterialsUsed = [
@@ -810,7 +863,6 @@ const List<String> kDressingMaterialsUsed = [
   'Cotton / Cotton Ball',
   'Eye Pad',
   'Sling / Arm Sling',
-  'Other',
 ];
 
 const List<String> kWoundFindings = [
@@ -821,7 +873,6 @@ const List<String> kWoundFindings = [
   'Pus / discharge present',
   'Bleeding controlled',
   'Edges approximated / sutured',
-  'Other',
 ];
 
 const List<String> kWoundInjuryTiming = [
@@ -829,21 +880,18 @@ const List<String> kWoundInjuryTiming = [
   'Within 6 hours',
   '6 to 24 hours',
   'More than 24 hours',
-  'Other',
 ];
 
 const List<String> kBurnDegrees = [
   '1st degree',
   '2nd degree',
   '3rd degree',
-  'Other',
 ];
 
 const List<String> kBleedingStatus = [
   'None',
   'Controlled',
   'Still bleeding',
-  'Other',
 ];
 
 const List<String> kTetanusStatus = [
@@ -860,7 +908,6 @@ const List<String> kWoundActions = [
   'Sent home',
   'Returned to class',
   'Follow-up scheduled',
-  'Other',
 ];
 
 const String kWoundNoFurtherDressing = 'No further dressing needed';
@@ -899,7 +946,6 @@ List<String> woundReferralReasons(
   final burn = _strOf(data['burn_degree']);
   final timing = _strOf(data['injury_timing']);
   final findings = _strListOf(data['assessment']);
-  final length = _numOf(data['wound_length_cm']);
 
   final reasons = <String>[];
   if (kWoundTetanusTypes.contains(type)) {
@@ -913,9 +959,6 @@ List<String> woundReferralReasons(
   }
   if (kWoundOpenTypes.contains(type) && kWoundHeadSites.contains(location)) {
     reasons.add('$type on the ${location.toLowerCase()}');
-  }
-  if (length != null && length >= kWoundReferralLengthCm) {
-    reasons.add('Wound ${_trimNum(length)} cm across');
   }
   if (condition.contains('Infected') &&
       temperature != null &&
@@ -937,10 +980,230 @@ List<String> woundReferralReasons(
 bool woundNeedsReferral(Map<String, dynamic> data, {num? temperature}) =>
     woundReferralReasons(data, temperature: temperature).isNotEmpty;
 
+/// Wounds where it is worth asking about tetanus: puncture, animal bite,
+/// laceration, a 2nd or 3rd degree burn, or any dirty or infected wound.
+/// A clean scrape, clean cut or blister does not ask.
+bool woundNeedsTetanusCheck(Map<String, dynamic> data) {
+  final type = _answersOf(data['wound_type']);
+  final cond = _answersOf(data['wound_condition']);
+  final burn = _answersOf(data['burn_degree']);
+  if (type.any(const ['Puncture', 'Animal bite', 'Laceration'].contains)) {
+    return true;
+  }
+  if (type.contains('Burn') &&
+      burn.any(const ['2nd degree', '3rd degree'].contains)) {
+    return true;
+  }
+  return cond.any(kWoundTetanusConditions.contains);
+}
+
+/// Temperature / blood pressure matter for an infected wound or a deeper burn.
+bool woundNeedsVitals(Map<String, dynamic> data) {
+  final cond = _answersOf(data['wound_condition']);
+  final type = _answersOf(data['wound_type']);
+  final burn = _answersOf(data['burn_degree']);
+  return cond.contains('Infected') ||
+      (type.contains('Burn') &&
+          burn.any(const ['2nd degree', '3rd degree'].contains));
+}
+
+/// A next dressing date is asked only when one is likely.
+bool woundNeedsNextDressing(Map<String, dynamic> data) {
+  final conds = _answersOf(data['wound_condition']);
+  final acts = _answersOf(data['action_taken']);
+  return conds.contains('Infected') ||
+      conds.contains('Healing') ||
+      acts.contains('Follow-up scheduled');
+}
+
+List<String> woundCleaningFor(Map<String, dynamic> data) {
+  final type = _answersOf(data['wound_type']);
+  if (type.contains('Burn')) {
+    return const ['Running water', 'Normal Saline', 'Tap water'];
+  }
+  return kWoundCleaningPerformed;
+}
+
+List<String> woundFindingsFor(Map<String, dynamic> data) {
+  final type = _answersOf(data['wound_type']);
+  final canBeClosed = type.any(kWoundOpenTypes.contains);
+  return [
+    for (final f in kWoundFindings)
+      if (canBeClosed || f != 'Edges approximated / sutured') f,
+  ];
+}
+
+/// What First Aid offers depends on the kind of incident.
+enum FirstAidGroup { wound, injury, nosebleed, allergy, illness, other }
+
+FirstAidGroup firstAidGroupOf(String incident) => switch (incident) {
+      'Wound' || 'Bleeding' || 'Burn' => FirstAidGroup.wound,
+      'Minor Injury' ||
+      'Fall' ||
+      'Sprain / Strain' ||
+      'Bruise' ||
+      'Head Injury' ||
+      'Eye Injury' =>
+        FirstAidGroup.injury,
+      'Nosebleed' => FirstAidGroup.nosebleed,
+      'Insect Bite / Allergic Reaction' => FirstAidGroup.allergy,
+      'Headache' ||
+      'Dizziness' ||
+      'Fainting' ||
+      'Stomach Pain / Nausea' ||
+      'Menstrual Cramps' =>
+        FirstAidGroup.illness,
+      _ => FirstAidGroup.other,
+    };
+
+const Map<FirstAidGroup, List<String>> _kFirstAidFindingsByGroup = {
+  FirstAidGroup.wound: [
+    'Pain',
+    'Swelling',
+    'Bleeding',
+    'Redness',
+    'Wound / Open Skin',
+    'Burn',
+  ],
+  FirstAidGroup.injury: [
+    'Pain',
+    'Swelling',
+    'Bruising',
+    'Redness',
+    'Limited Movement',
+    'Bleeding',
+    'Wound / Open Skin',
+  ],
+  FirstAidGroup.nosebleed: ['Bleeding', 'Nausea / Vomiting'],
+  FirstAidGroup.allergy: [
+    'Pain',
+    'Swelling',
+    'Redness',
+    'Allergic Reaction / Hives',
+    'Difficulty Breathing',
+  ],
+  FirstAidGroup.illness: ['Pain', 'Nausea / Vomiting', 'Difficulty Breathing'],
+};
+
+const Map<FirstAidGroup, List<String>> _kFirstAidTreatmentsByGroup = {
+  FirstAidGroup.wound: [
+    'Bleeding Control',
+    'Cold Compress',
+    'Rest / Observation',
+    'Basic Medication Given',
+  ],
+  FirstAidGroup.injury: [
+    'Bleeding Control',
+    'Cold Compress',
+    'Warm Compress',
+    'Immobilization',
+    'Bandaging',
+    'Rest / Observation',
+    'Basic Medication Given',
+  ],
+  FirstAidGroup.nosebleed: [
+    'Bleeding Control',
+    'Cold Compress',
+    'Rest / Observation',
+  ],
+  FirstAidGroup.allergy: [
+    'Cold Compress',
+    'Rest / Observation',
+    'Basic Medication Given',
+  ],
+  FirstAidGroup.illness: [
+    'Rest / Observation',
+    'Cold Compress',
+    'Warm Compress',
+    'Basic Medication Given',
+  ],
+};
+
+List<String> firstAidFindingsFor(Map<String, dynamic> data) =>
+    _kFirstAidFindingsByGroup[firstAidGroupOf(_strOf(data['incident']))] ??
+    kFirstAidFindings;
+
+List<String> firstAidTreatmentsFor(Map<String, dynamic> data) =>
+    _kFirstAidTreatmentsByGroup[firstAidGroupOf(_strOf(data['incident']))] ??
+    kFirstAidTreatments;
+
+bool firstAidIsIllness(Map<String, dynamic> data) =>
+    firstAidGroupOf(_strOf(data['incident'])) == FirstAidGroup.illness;
+
+bool firstAidIsHeadCase(Map<String, dynamic> data) {
+  final incident = _strOf(data['incident']);
+  if (incident == 'Head Injury') return true;
+  final site = _strOf(data['body_part']);
+  return incident == 'Fall' && (site == 'Head' || site == 'Face');
+}
+
+bool firstAidNeedsVitals(Map<String, dynamic> data) {
+  final incident = _strOf(data['incident']);
+  const needs = [
+    'Head Injury',
+    'Fainting',
+    'Dizziness',
+    'Headache',
+    'Stomach Pain / Nausea',
+    'Menstrual Cramps',
+    'Insect Bite / Allergic Reaction',
+  ];
+  return needs.contains(incident) ||
+      firstAidIsHeadCase(data) ||
+      _strListOf(data['findings']).contains('Difficulty Breathing');
+}
+
+bool firstAidSuggestsWoundCare(Map<String, dynamic> data) {
+  final incident = _strOf(data['incident']);
+  if (incident == 'Wound' || incident == 'Bleeding' || incident == 'Burn') {
+    return true;
+  }
+  final findings = _strListOf(data['findings']);
+  return findings.contains('Wound / Open Skin') || findings.contains('Burn');
+}
+
+bool firstAidSuggestsConsultation(Map<String, dynamic> data) {
+  final signs =
+      _strListOf(data['head_injury_signs']).where((s) => s != 'None of these');
+  return signs.isNotEmpty ||
+      _strOf(data['condition_after']) == 'Requires Further Treatment' ||
+      _strListOf(data['findings']).contains('Difficulty Breathing');
+}
+
+/// True when blood pressure, pulse or temperature on the Vital Signs form is
+/// outside the normal range. (Respiratory rate and oxygen are not part of
+/// this check.)
+bool vitalReadingsAbnormal(Map<String, dynamic> data) {
+  final bp = VitalClassifier.classifyBp(
+    VitalClassifier.asWhole(data['systolic']),
+    VitalClassifier.asWhole(data['diastolic']),
+  );
+  final pulse =
+      VitalClassifier.classifyPulse(VitalClassifier.asWhole(data['pulse_bpm']));
+  final temp = VitalClassifier.classifyTemp(
+      VitalClassifier.asNumber(data['temp_c'])?.toDouble());
+  return bp?.isAbnormal == true ||
+      pulse?.isAbnormal == true ||
+      temp?.isAbnormal == true;
+}
+
+/// Details that are the same in Wound Dressing and First Aid. When both
+/// services are in one visit, typing it in one fills the other. If only one
+/// of the two is in the visit, that form just has its own boxes.
+/// Each pair is (Wound Dressing key, First Aid key).
+const List<(String, String)> kWoundFirstAidSharedKeys = [
+  ('wound_location', 'body_part'),
+  ('injury_cause', 'incident_cause'),
+];
+
 bool isReferralDisposition(String disposition) =>
     disposition.startsWith('Referred to');
 
-String _strOf(Object? v) => v == null ? '' : '$v'.trim();
+String _strOf(Object? v) {
+  if (v == null) return '';
+  if (v is List) return v.isEmpty ? '' : '${v.first}'.trim();
+  return '$v'.trim();
+}
 
 List<String> _answersOf(Object? v) {
   if (v == null) return const [];
@@ -955,12 +1218,6 @@ List<String> _answersOf(Object? v) {
 }
 
 List<String> _strListOf(Object? v) => _answersOf(v);
-
-num? _numOf(Object? v) {
-  if (v is num) return v;
-  if (v == null) return null;
-  return num.tryParse('$v'.trim());
-}
 
 String _trimNum(num n) {
   if (n == n.roundToDouble()) return n.toInt().toString();
@@ -979,7 +1236,6 @@ const List<String> kMedicationReasons = [
   'Allergies',
   'Body Ache',
   'Diarrhea',
-  'Other',
 ];
 
 const List<String> kFirstAidIncidents = [
@@ -999,7 +1255,6 @@ const List<String> kFirstAidIncidents = [
   'Fainting',
   'Stomach Pain / Nausea',
   'Menstrual Cramps',
-  'Other',
 ];
 
 const List<String> kFirstAidFindings = [
@@ -1014,7 +1269,6 @@ const List<String> kFirstAidFindings = [
   'Allergic Reaction / Hives',
   'Difficulty Breathing',
   'Nausea / Vomiting',
-  'Other',
 ];
 
 const List<String> kFirstAidTreatments = [
@@ -1027,7 +1281,6 @@ const List<String> kFirstAidTreatments = [
   'Immobilization',
   'Rest / Observation',
   'Basic Medication Given',
-  'Other',
 ];
 
 const List<String> kConditionAfterTreatment = [
@@ -1066,7 +1319,6 @@ const List<String> kFirstAidPlaces = [
   'Clinic (already here)',
   'Outside School Grounds',
   'At Home',
-  'Other',
 ];
 
 const List<String> kFirstAidHeadSigns = [
@@ -1106,7 +1358,6 @@ const List<String> kPrenatalServices = [
   'Pre-Eclampsia Monitoring',
   'Iron / Folic Acid',
   'Referral to Doctor/OB',
-  'Other',
 ];
 
 const List<String> kPrenatalActions = [
@@ -1117,7 +1368,6 @@ const List<String> kPrenatalActions = [
   'Referred to Hospital/RHU',
   'Parents/Guardian Informed (if student)',
   'Follow-up Scheduled',
-  'Other',
 ];
 
 const List<String> kPrenatalEdema = [
@@ -1144,14 +1394,12 @@ const List<String> kPrenatalDangerSigns = [
   'Fever',
   'Convulsions',
   'Decreased baby movement',
-  'Other',
 ];
 
 const List<String> kPrenatalGiven = [
   'Iron / Folic Acid',
   'Tetanus Toxoid (TT)',
   'Calcium',
-  'Other',
 ];
 
 const List<String> kBpArms = ['Left', 'Right'];
@@ -1174,7 +1422,6 @@ const List<String> kVitalActions = [
   'Guardian / companion informed',
   'Sent home',
   'Cleared to return to class / work',
-  'Other',
 ];
 
 const List<String> kReferralActions = ['Referred to hospital / emergency care'];
@@ -1222,6 +1469,98 @@ const List<({String key, String label})> kPhysicalExamRows = [
   (key: 'immunization', label: 'Immunization'),
 ];
 
+const String kOtherLabel = 'Other';
+
+/// Simple wording shown on screen. Only the DISPLAY changes: the value that is
+/// saved and checked by the rules stays exactly as before, so old records and
+/// referral rules keep working.
+const Map<String, String> kOptionLabels = {
+  // Wound Dressing
+  'Incised / Cut': 'Incision (clean cut)',
+  'Abrasion': 'Abrasion (scrape)',
+  'Laceration': 'Laceration (jagged cut)',
+  'Puncture': 'Puncture (deep hole)',
+  'Contaminated / Dirty': 'Dirty',
+  'Normal Saline': 'Saline',
+  'Povidone-Iodine': 'Povidone-iodine',
+  'Sterile Gauze': 'Gauze',
+  'Gauze Pad': 'Gauze pad',
+  'Bandage / Roller': 'Roller bandage',
+  'Crepe Bandage': 'Elastic bandage',
+  'Adhesive Plaster': 'Adhesive tape',
+  'Cotton / Cotton Ball': 'Cotton',
+  'Eye Pad': 'Eye pad',
+  'Sling / Arm Sling': 'Arm sling',
+  'Wound edges clean': 'Clean edges',
+  'No signs of infection': 'No infection signs',
+  'Redness present': 'Redness',
+  'Swelling present': 'Swelling',
+  'Pus / discharge present': 'Pus / discharge',
+  'Bleeding controlled': 'Bleeding stopped',
+  'Edges approximated / sutured': 'Edges closed / stitched',
+  '1st degree': '1st degree (red skin)',
+  '2nd degree': '2nd degree (blisters)',
+  '3rd degree': '3rd degree (deep)',
+  'Controlled': 'Stopped',
+  'Advice given (keep dry, signs of infection)': 'Advice given',
+  'Referred to Hospital/RHU': 'Referred to hospital / RHU',
+  'Parents / Guardian informed': 'Guardian informed',
+  'Follow-up scheduled': 'Follow-up set',
+  // First Aid
+  'Insect Bite / Allergic Reaction': 'Insect bite / allergy',
+  'Wound / Open Skin': 'Open wound',
+  'Allergic Reaction / Hives': 'Allergy / hives',
+  'Limited Movement': 'Hard to move',
+  'Bleeding Control': 'Stop bleeding',
+  'Rest / Observation': 'Rest and watch',
+  'Basic Medication Given': 'Medicine given',
+  'Immobilization': 'Immobilize (splint / sling)',
+  'Requires Further Observation': 'Needs more monitoring',
+  'Requires Further Treatment': 'Needs more treatment',
+  'Advised to Monitor': 'Advised to watch',
+  'Follow-up Recommended': 'Follow-up advised',
+  'Clinic (already here)': 'In the clinic',
+  'Outside School Grounds': 'Outside school',
+  'Confusion / does not remember': 'Confused / memory loss',
+  'Clear fluid or blood from nose or ears': 'Fluid or blood from nose / ear',
+  'Weakness / numbness in limbs': 'Weak / numb arms or legs',
+  // Medical Consultation
+  'Allergy to medicine': 'Drug allergy',
+  'Asthma / known condition': 'Asthma / long-term illness',
+  'Taking medicine now': 'On medicine now',
+  'Advice / Health Education': 'Advice given',
+  'Signs of allergic reaction': 'Allergic reaction signs',
+  'Head injury with vomiting or confusion': 'Head injury + vomiting / confusion',
+  'Rested in Clinic then Returned to Class': 'Rested, then back to class',
+  'Referred to Physician / Healthcare Facility': 'Referred to doctor / hospital',
+  'Physician': 'Doctor',
+  'Nurse + Physician': 'Nurse + doctor',
+  // Health Counselling
+  'Mental/Emotional Well-being': 'Mental health',
+  'Medication / Treatment Adherence': 'Following treatment',
+  'Physical Activity / Exercise': 'Exercise',
+  'Substance Use (smoking, vaping, alcohol)': 'Smoking / vaping / alcohol',
+  'Self-referred': 'Came on their own',
+  'Referred by Teacher / Adviser': 'Teacher / adviser',
+  'Referred by Guardian': 'Guardian',
+  'Nurse-initiated / Follow-up': 'Nurse follow-up',
+  'Referred from another clinic service': 'Other clinic service',
+  'Advice / Guidance': 'Advice',
+  'Preventive Education': 'Prevention tips',
+  'Lifestyle / Behavior Advice': 'Lifestyle advice',
+  'Medication-related Education': 'Medicine advice',
+  // Prenatal
+  'Not yet expected (early pregnancy)': 'Too early to feel',
+  'High-Risk Follow-up': 'High-risk follow-up',
+  'Pre-Eclampsia Monitoring': 'Pre-eclampsia check',
+  'Referral to Doctor/OB': 'Referral to doctor / OB',
+  'Referred for Further Testing': 'Referred for tests',
+  'Parents/Guardian Informed (if student)': 'Guardian informed (if student)',
+};
+
+/// The simple wording for a saved choice. Anything not listed shows as is.
+String optionLabel(String option) => kOptionLabels[option] ?? option;
+
 class VisitServiceForms {
   const VisitServiceForms._();
 
@@ -1243,6 +1582,7 @@ class VisitServiceForms {
   static final Map<String, ServiceFormSpec> _specs = {
     'bpi': ServiceFormSpec(
       serviceId: 'bpi',
+      allowOther: false,
       slides: [
         ServiceSlide(
           title: 'Measurement',
@@ -1272,14 +1612,14 @@ class VisitServiceForms {
               label: 'BMI',
               kind: ServiceFieldKind.readOnly,
               width: FieldWidth.half,
-              note: 'Worked out from the height and weight above.',
+              note: 'Calculated from height and weight.',
             ),
             ServiceField(
               key: 'bmi_class',
               label: 'BMI Classification',
               kind: ServiceFieldKind.readOnly,
               width: FieldWidth.half,
-              note: 'The adult band this BMI falls in.',
+              note: 'Weight category for this BMI.',
             ),
             notes(),
           ],
@@ -1290,18 +1630,9 @@ class VisitServiceForms {
     'health_counselling': ServiceFormSpec(
       serviceId: 'health_counselling',
       referralTitle:
-          'Refer to Guidance Counselor / Clinic Head today. Do not leave the '
-          'student alone if there is a risk of self-harm.',
+          'Refer to the Guidance Counselor or Clinic Head today. Do not leave '
+          'the student alone if there is a risk of self-harm.',
       referralReasons: (data, _) => counsellingReferralReasons(data),
-      warnings: (data, _) {
-        if (counsellingReferralReasons(data).isEmpty) return const [];
-        final answer = '${data['additional_service_needed'] ?? ''}'.trim();
-        if (answer == 'Yes') return const [];
-        return const [
-          'This session raises a referral. Confirm the additional service or '
-              'referral on the last slide.',
-        ];
-      },
       slides: [
         ServiceSlide(
           title: 'Counselling Information',
@@ -1312,15 +1643,14 @@ class VisitServiceForms {
               kind: ServiceFieldKind.staffName,
               required: true,
               width: FieldWidth.half,
-              note: 'Yours by default. Change it to another clinic account, or '
-                  'type a name if the session was run by someone without one.',
+              note: 'Staff who ran the session.',
             ),
             ServiceField(
               key: 'session_date',
               label: 'Date / Time',
               kind: ServiceFieldKind.readOnly,
               width: FieldWidth.half,
-              note: 'From the visit. Not typed.',
+              note: 'Taken from the visit.',
             ),
             ServiceField(
               key: 'referral_source',
@@ -1328,11 +1658,12 @@ class VisitServiceForms {
               kind: ServiceFieldKind.chips,
               options: kCounsellingReferralSource,
               required: true,
-              note: 'How the session started. One.',
+              note: 'Who sent the student. Pick one.',
             ),
             ServiceField(
               key: 'session_type',
-              label: 'Session Type',
+              otherOption: false,
+              label: 'Session type',
               kind: ServiceFieldKind.chips,
               options: kCounsellingSessionType,
               required: true,
@@ -1340,29 +1671,21 @@ class VisitServiceForms {
             ),
             ServiceField(
               key: 'privacy_level',
+              otherOption: false,
               label: 'Privacy level',
               kind: ServiceFieldKind.chips,
               options: kCounsellingPrivacyLevels,
               required: true,
               width: FieldWidth.half,
-              note: 'Set to Restricted automatically for sensitive topics or a '
-                  'referral. You can raise it, but not lower it once set.',
+              note: 'Sensitive topics or a referral set it to Restricted.',
             ),
             ServiceField(
               key: 'topic',
-              label: 'Counselling Topic',
+              label: 'Counselling topic',
               kind: ServiceFieldKind.checkboxes,
               options: kCounsellingTopics,
               required: true,
-              note: 'Tick at least one. One session can cover two.',
-            ),
-            ServiceField(
-              key: 'topic_other',
-              label: 'Other Topic',
-              kind: ServiceFieldKind.text,
-              required: true,
-              shownWhenKey: 'topic',
-              shownWhenValues: ['Other'],
+              note: 'Tick all that were discussed.',
             ),
             const ServiceField(
               key: 'privacy_notice',
@@ -1374,11 +1697,9 @@ class VisitServiceForms {
               key: 'reason',
               label: 'Reason / Concern',
               kind: ServiceFieldKind.multiline,
-              required: false,
               maxChars: 300,
               validate: _cappedLength(300, 'the reason'),
-              note: 'Optional. Why this person needed counselling. The topic '
-                  'says what was discussed; this says why.',
+              note: 'Why the student needed counselling.',
             ),
           ],
         ),
@@ -1387,71 +1708,74 @@ class VisitServiceForms {
           fields: [
             ServiceField(
               key: 'provided',
-              label: 'Counselling Provided',
+              label: 'Counselling provided',
               kind: ServiceFieldKind.checkboxes,
               options: kCounsellingProvided,
               required: true,
-              note: 'Tick at least one. What the clinic did, not what happens '
-                  'next.',
-            ),
-            ServiceField(
-              key: 'provided_other',
-              label: 'Other (specify)',
-              kind: ServiceFieldKind.text,
-              required: true,
-              shownWhenKey: 'provided',
-              shownWhenValues: ['Other'],
+              note: 'Tick what was done.',
             ),
             ServiceField(
               key: 'understanding',
+              otherOption: false,
               label: 'Student understanding',
               kind: ServiceFieldKind.chips,
               options: kCounsellingUnderstanding,
               required: true,
-              note: 'How well they took it in. Not a grade.',
             ),
             ServiceField(
               key: 'student_response',
               label: 'Student response',
               kind: ServiceFieldKind.text,
-              required: false,
               maxChars: 200,
               validate: _cappedLength(200, 'the response'),
-              note: 'Optional. What they said or did, in a line.',
+              note: 'What they said or did, in one line.',
             ),
             ServiceField(
               key: 'duration_minutes',
               label: 'Duration in minutes',
               kind: ServiceFieldKind.number,
               unit: 'min',
-              required: false,
               width: FieldWidth.half,
               validate: _vitalWhole(1, 180),
-              note: 'Optional. Whole minutes, 1–180.',
             ),
             ServiceField(
               key: 'concern_signs',
-              label: 'Concern signs check',
+              label: 'Warning signs check',
               kind: ServiceFieldKind.checkboxes,
               options: kCounsellingConcernSigns,
-              required: false,
-              note: 'Optional. Any sign other than "None" refers today and '
-                  'locks the record to Restricted.',
+              note: 'Any sign means refer today. Record becomes Restricted.',
             ),
             ServiceField(
               key: 'guardian_informed',
+              otherOption: false,
               label: 'Guardian informed',
               kind: ServiceFieldKind.chips,
               options: kCounsellingGuardian,
               required: true,
-              requiredWhen: (data) =>
-                  counsellingReferralReasons(data).isNotEmpty,
               width: FieldWidth.half,
-              note: 'Required once a concern sign is ticked.',
+              shownWhenPredicate: (data) =>
+                  counsellingReferralReasons(data).isNotEmpty,
+            ),
+            ServiceField(
+              key: 'referred_to',
+              label: 'Referred to (name or place)',
+              kind: ServiceFieldKind.text,
+              required: true,
+              shownWhenPredicate: (data) =>
+                  counsellingReferralReasons(data).isNotEmpty,
+              note: 'e.g. Guidance Counselor or hospital.',
+            ),
+            ServiceField(
+              key: 'referral_reason',
+              label: 'Reason for referral',
+              kind: ServiceFieldKind.text,
+              shownWhenPredicate: (data) =>
+                  counsellingReferralReasons(data).isNotEmpty,
             ),
             ServiceField(
               key: 'follow_up_needed',
-              label: 'Follow-up Needed?',
+              otherOption: false,
+              label: 'Follow-up needed?',
               kind: ServiceFieldKind.chips,
               options: kYesNo,
               required: true,
@@ -1459,7 +1783,7 @@ class VisitServiceForms {
             ),
             ServiceField(
               key: 'follow_up_reason',
-              label: 'Reason for Follow-up',
+              label: 'Reason for follow-up',
               kind: ServiceFieldKind.text,
               required: true,
               shownWhenKey: 'follow_up_needed',
@@ -1467,82 +1791,35 @@ class VisitServiceForms {
             ),
             ServiceField(
               key: 'follow_up_date',
-              label: 'Follow-up Date',
+              label: 'Follow-up date',
               kind: ServiceFieldKind.date,
               width: FieldWidth.half,
               shownWhenKey: 'follow_up_needed',
               shownWhenValues: ['Yes'],
-              note:
-                  'Optional — today or later only. Blank when it has no date yet.',
-            ),
-          ],
-        ),
-        ServiceSlide(
-          title: 'Additional Service / Referral',
-          fields: [
-            ServiceField(
-              key: 'additional_service_needed',
-              label: 'Additional Service Needed?',
-              kind: ServiceFieldKind.chips,
-              options: kYesNo,
-              required: true,
-              width: FieldWidth.half,
-              note: 'Does this person need another clinic service because of '
-                  'what was discussed? Nothing is sent anywhere by answering '
-                  'this — it is a note on the record for whoever sees them next.',
+              note: 'Today or later only.',
             ),
             ServiceField(
-              key: 'referral_service',
-              label: 'Recommended Service',
-              kind: ServiceFieldKind.dropdown,
-              options: kCounsellingRecommendedServices,
-              required: true,
-              width: FieldWidth.half,
-              shownWhenKey: 'additional_service_needed',
-              shownWhenValues: ['Yes'],
-              note:
-                  'Only services this clinic actually runs, plus the two ways '
-                  'out of the building. Health Counselling itself is not listed.',
-            ),
-            ServiceField(
-              key: 'referral_service_other',
-              label: 'Other (specify)',
-              kind: ServiceFieldKind.text,
-              required: true,
-              width: FieldWidth.half,
-              shownWhenKey: 'referral_service',
-              shownWhenValues: ['Other'],
-            ),
-            ServiceField(
-              key: 'referred_to',
-              label: 'Referred to (name or place)',
-              kind: ServiceFieldKind.text,
-              required: true,
-              shownWhenKey: 'referral_service',
-              shownWhenValues: const [
-                'Guidance Counselor (school)',
-                'External Healthcare Facility',
-              ],
-              note: 'Who or where, by name.',
-            ),
-            ServiceField(
-              key: 'referral_link',
-              label: 'Add this service to the visit',
+              key: 'bmi_link',
+              label: 'BMI',
               kind: ServiceFieldKind.linkServiceCard,
-              linkFromKey: 'referral_service',
-              buttonLabel: 'Add this service to the visit',
-              shownWhenKey: 'additional_service_needed',
-              shownWhenValues: ['Yes'],
-              note: 'Ticks the service into this visit and opens its form. '
-                  'Everything typed here is kept.',
+              opensService: 'bpi',
+              buttonLabel: 'Open BMI',
+              shownWhenKey: 'topic',
+              shownWhenValues: [
+                'Nutrition / Diet',
+                'Physical Activity / Exercise'
+              ],
+              note: 'Height and weight may help. Optional.',
             ),
             ServiceField(
-              key: 'referral_reason',
-              label: 'Reason for Referral',
-              kind: ServiceFieldKind.text,
-              required: true,
-              shownWhenKey: 'additional_service_needed',
-              shownWhenValues: ['Yes'],
+              key: 'consult_link',
+              label: 'Medical Consultation',
+              kind: ServiceFieldKind.linkServiceCard,
+              opensService: 'medicine_consultation',
+              buttonLabel: 'Open Medical Consultation',
+              shownWhenKey: 'topic',
+              shownWhenValues: ['Medication / Treatment Adherence', 'Sleep'],
+              note: 'A doctor may need to check. Optional.',
             ),
             notes(),
           ],
@@ -1558,15 +1835,16 @@ class VisitServiceForms {
           fields: [
             ServiceField(
               key: 'lmp',
-              label: 'Last Menstrual Period',
+              label: 'Last Menstrual Period (LMP)',
               kind: ServiceFieldKind.date,
               required: true,
               datePast: true,
               width: FieldWidth.half,
-              note: 'If unknown, tick "LMP not sure / unknown".',
+              note: 'First day of her last period. Tick Unknown if not sure.',
             ),
             ServiceField(
               key: 'lmp_unknown',
+              otherOption: false,
               label: 'LMP not sure / unknown',
               kind: ServiceFieldKind.checkboxes,
               options: const ['Unknown'],
@@ -1578,14 +1856,14 @@ class VisitServiceForms {
               label: 'Age of Gestation',
               kind: ServiceFieldKind.readOnly,
               width: FieldWidth.half,
-              note: 'Weeks and days since the LMP.',
+              note: 'Weeks of pregnancy so far.',
             ),
             ServiceField(
               key: 'edd',
               label: 'Expected Due Date',
               kind: ServiceFieldKind.readOnly,
               width: FieldWidth.half,
-              note: 'LMP + 280 days.',
+              note: 'Estimated delivery date.',
             ),
             ServiceField(
               key: 'gravida',
@@ -1593,7 +1871,7 @@ class VisitServiceForms {
               kind: ServiceFieldKind.number,
               required: true,
               width: FieldWidth.half,
-              note: 'Total pregnancies ever, this one included.',
+              note: 'Total pregnancies, including this one.',
             ),
             ServiceField(
               key: 'para',
@@ -1601,7 +1879,7 @@ class VisitServiceForms {
               kind: ServiceFieldKind.number,
               required: true,
               width: FieldWidth.half,
-              note: 'Pregnancies that reached a birth, not including this one.',
+              note: 'Births so far, not counting this pregnancy.',
             ),
           ],
         ),
@@ -1613,15 +1891,14 @@ class VisitServiceForms {
               label: 'Vital Signs',
               kind: ServiceFieldKind.vitalsCard,
               width: FieldWidth.full,
-              note: 'BP, pulse and temperature are recorded once for the visit '
-                  'on the Vital Signs service, then shown read-only here.',
+              note: 'Taken in Vital Signs. Read only here.',
             ),
             ServiceField(
               key: 'bp_assessment',
               label: 'BP Classification',
               kind: ServiceFieldKind.readOnly,
               width: FieldWidth.half,
-              note: 'Worked out from the visit\'s blood pressure.',
+              note: 'From the visit\'s blood pressure.',
             ),
             ServiceField(
               key: 'fundal_height',
@@ -1630,7 +1907,7 @@ class VisitServiceForms {
               unit: 'cm',
               required: false,
               width: FieldWidth.half,
-              note: 'Only applicable when AOG >= 20 weeks.',
+              note: 'Top of the womb to pubic bone. From 20 weeks only.',
             ),
             ServiceField(
               key: 'fetal_heart_tone',
@@ -1639,9 +1916,11 @@ class VisitServiceForms {
               unit: 'bpm',
               required: false,
               width: FieldWidth.half,
+              note: 'Baby\'s heartbeat per minute.',
             ),
             ServiceField(
               key: 'fetal_heart_not_done',
+              otherOption: false,
               label: '',
               kind: ServiceFieldKind.checkboxes,
               options: const ['Not done / no equipment'],
@@ -1650,6 +1929,7 @@ class VisitServiceForms {
             ),
             ServiceField(
               key: 'fetal_movement',
+              otherOption: false,
               label: 'Fetal Movement',
               kind: ServiceFieldKind.dropdown,
               options: kFetalMovements,
@@ -1663,23 +1943,22 @@ class VisitServiceForms {
           fields: [
             ServiceField(
               key: 'edema',
-              label: 'Oedema / Swelling',
+              label: 'Swelling (edema)',
               kind: ServiceFieldKind.chips,
               options: kPrenatalEdema,
               required: false,
               width: FieldWidth.half,
-              note:
-                  'Face or hands matters more than feet: sudden swelling there '
-                  'with a raised blood pressure is a clinician, not a note.',
+              note: 'Swelling of the face or hands is more serious than feet.',
             ),
             ServiceField(
               key: 'urine_protein',
+              otherOption: false,
               label: 'Urine Protein',
               kind: ServiceFieldKind.chips,
               options: kPrenatalUrineProtein,
               required: false,
               width: FieldWidth.half,
-              note: '"Not tested" is a real answer here.',
+              note: 'Protein in urine can be a sign of pre-eclampsia.',
             ),
             ServiceField(
               key: 'danger_signs',
@@ -1689,18 +1968,6 @@ class VisitServiceForms {
               required: false,
               width: FieldWidth.full,
             ),
-            ServiceField(
-              key: 'danger_signs_other',
-              label: 'Other Danger Sign',
-              kind: ServiceFieldKind.text,
-              required: true,
-              width: FieldWidth.full,
-              note:
-                  'The sign itself, in your own words. This is what the record '
-                  'keeps, not the word "Other".',
-              shownWhenKey: 'danger_signs',
-              shownWhenValues: const ['Other'],
-            ),
           ],
         ),
         ServiceSlide(
@@ -1708,6 +1975,7 @@ class VisitServiceForms {
           fields: [
             ServiceField(
               key: 'care_elsewhere',
+              otherOption: false,
               label: 'Prenatal care elsewhere?',
               kind: ServiceFieldKind.dropdown,
               options: const ['Yes', 'No', 'Unknown'],
@@ -1725,20 +1993,12 @@ class VisitServiceForms {
             ),
             ServiceField(
               key: 'service_provided',
+              otherKey: 'other_service_specify',
               label: 'Service / Care Provided',
               kind: ServiceFieldKind.checkboxes,
               options: kPrenatalServices,
               required: true,
               note: 'Tick at least one.',
-            ),
-            ServiceField(
-              key: 'other_service_specify',
-              label: 'Other (specify)',
-              kind: ServiceFieldKind.text,
-              required: false,
-              width: FieldWidth.full,
-              shownWhenKey: 'service_provided',
-              shownWhenValues: const ['Other'],
             ),
             ServiceField(
               key: 'action_taken',
@@ -1749,35 +2009,11 @@ class VisitServiceForms {
               note: 'Tick at least one.',
             ),
             ServiceField(
-              key: 'action_taken_other',
-              label: 'Other Action / Advice',
-              kind: ServiceFieldKind.text,
-              required: true,
-              width: FieldWidth.full,
-              note: 'The action itself, in your own words. This is what the '
-                  'record keeps, not the word "Other".',
-              shownWhenKey: 'action_taken',
-              shownWhenValues: const ['Other'],
-            ),
-            ServiceField(
               key: 'given_this_visit',
               label: 'Given This Visit',
               kind: ServiceFieldKind.checkboxes,
               options: kPrenatalGiven,
-              note:
-                  'What she went home with. Leave blank when nothing was handed over.',
-            ),
-            ServiceField(
-              key: 'given_this_visit_other',
-              label: 'Other Given This Visit',
-              kind: ServiceFieldKind.text,
-              required: true,
-              width: FieldWidth.full,
-              note:
-                  'The item itself, in your own words. This is what the record '
-                  'keeps, not the word "Other".',
-              shownWhenKey: 'given_this_visit',
-              shownWhenValues: const ['Other'],
+              note: 'Items handed to her today.',
             ),
             ServiceField(
               key: 'referred_to',
@@ -1793,6 +2029,21 @@ class VisitServiceForms {
               shownWhen: FieldCondition.startsWith,
             ),
             ServiceField(
+              key: 'consult_link',
+              label: 'Doctor-level check',
+              kind: ServiceFieldKind.linkServiceCard,
+              opensService: 'medicine_consultation',
+              buttonLabel: 'Open Medical Consultation',
+              shownWhenPredicate: (data) {
+                final signs = _strListOf(data['danger_signs'])
+                    .where((s) => s != 'None');
+                return signs.isNotEmpty ||
+                    _strOf(data['edema']) == 'Hands / Face' ||
+                    _strOf(data['urine_protein']) == '2+ or more';
+              },
+              note: 'A doctor should check these signs. Optional.',
+            ),
+            ServiceField(
               key: 'follow_up_date',
               label: 'Follow-up Date',
               kind: ServiceFieldKind.date,
@@ -1801,69 +2052,6 @@ class VisitServiceForms {
               note: 'Today or later only.',
             ),
             notes(),
-          ],
-        ),
-        ServiceSlide(
-          title: 'Additional Service',
-          fields: [
-            ServiceField(
-              key: 'recommended_service',
-              label: 'Recommended Service',
-              kind: ServiceFieldKind.dropdown,
-              options: kFirstAidRecommendedServices,
-              required: false,
-              width: FieldWidth.half,
-              note: 'Optional. A service this person should have next, if any.',
-            ),
-            ServiceField(
-              key: 'recommended_service_other',
-              label: 'Other (specify)',
-              kind: ServiceFieldKind.text,
-              required: false,
-              width: FieldWidth.half,
-              shownWhenKey: 'recommended_service',
-              shownWhenValues: ['Other'],
-            ),
-            ServiceField(
-              key: 'referred_to',
-              label: 'Referred to (name or place)',
-              kind: ServiceFieldKind.text,
-              required: true,
-              shownWhenKey: 'recommended_service',
-              shownWhenValues: const [
-                'Guidance Counselor (school)',
-                'External Healthcare Facility',
-              ],
-            ),
-            ServiceField(
-              key: 'recommended_service_link',
-              label: 'Add this service to the visit',
-              kind: ServiceFieldKind.linkServiceCard,
-              linkFromKey: 'recommended_service',
-              buttonLabel: 'Add this service to the visit',
-              shownWhenKey: 'recommended_service',
-              shownWhenValues: kFirstAidRecommendedServices,
-              shownWhen: FieldCondition.isOneOf,
-              note: 'Ticks the service into this visit and opens its form.',
-            ),
-            ServiceField(
-              key: 'counselling_hint',
-              label: 'Consider Health Counselling',
-              kind: ServiceFieldKind.linkServiceCard,
-              opensService: 'health_counselling',
-              buttonLabel: 'Add Health Counselling',
-              shownWhenPredicate: (data) {
-                final incident = _strOf(data['incident']);
-                return incident == 'Fainting' ||
-                    incident == 'Dizziness' ||
-                    incident == 'Headache' ||
-                    incident == 'Stomach Pain / Nausea' ||
-                    incident == 'Menstrual Cramps';
-              },
-              note: 'For these incidents a counselling session is often as '
-                  'useful as a physical check. A suggestion only — the choice '
-                  'is yours.',
-            ),
           ],
         ),
         VisitServiceForms.reviewSlide,
@@ -1878,18 +2066,11 @@ class VisitServiceForms {
           fields: [
             ServiceField(
               key: 'reason_common',
+              otherKey: 'reason_other',
               label: 'Reason/Complaints',
               kind: ServiceFieldKind.checkboxes,
               options: kMedicationReasons,
-              note: 'Tick the reason(s) the medicine is for.',
-            ),
-            ServiceField(
-              key: 'reason_other',
-              label: 'Other Reason',
-              kind: ServiceFieldKind.text,
-              required: true,
-              shownWhenKey: 'reason_common',
-              shownWhenValues: ['Other'],
+              note: 'Why the medicine is given.',
             ),
           ],
         ),
@@ -1913,8 +2094,8 @@ class VisitServiceForms {
                 disposition == 'Advised to Monitor')) {
           return {
             'disposition':
-                'Condition After Treatment says further treatment is needed — '
-                    '"$disposition" cannot follow from it.',
+                'The condition after first aid says more treatment is needed, '
+                    'so "$disposition" does not fit.',
           };
         }
         return const {};
@@ -1925,20 +2106,11 @@ class VisitServiceForms {
           fields: [
             ServiceField(
               key: 'incident',
-              label: 'Reason / Incident',
+              label: 'What happened (Incident)',
               kind: ServiceFieldKind.dropdown,
               options: kFirstAidIncidents,
               required: true,
               width: FieldWidth.half,
-            ),
-            ServiceField(
-              key: 'incident_other',
-              label: 'Other Incident',
-              kind: ServiceFieldKind.text,
-              required: true,
-              width: FieldWidth.half,
-              shownWhenKey: 'incident',
-              shownWhenValues: ['Other'],
             ),
             ServiceField(
               key: 'incident_timing',
@@ -1956,58 +2128,36 @@ class VisitServiceForms {
               width: FieldWidth.half,
             ),
             ServiceField(
-              key: 'incident_place_other',
-              label: 'Other Place',
-              kind: ServiceFieldKind.text,
-              width: FieldWidth.half,
-              shownWhenKey: 'incident_place',
-              shownWhenValues: ['Other'],
-            ),
-            ServiceField(
               key: 'incident_cause',
-              label: 'Cause / Circumstances',
+              label: 'How did it happen?',
               kind: ServiceFieldKind.text,
               width: FieldWidth.half,
               maxChars: 100,
-              validate: _cappedLength(100, 'the cause'),
+              validate: _cappedLength(100, 'this note'),
               hint: 'e.g. fell during PE',
-            ),
-            ServiceField(
-              key: 'known_allergies',
-              label: 'Known allergies',
-              kind: ServiceFieldKind.text,
-              width: FieldWidth.half,
-              note: 'Optional — anything that changes what you may give.',
+              shownWhenPredicate: (data) => !firstAidIsIllness(data),
             ),
             ServiceField(
               key: 'body_part',
-              label: 'Body Location',
+              label: 'Body part (Location)',
               kind: ServiceFieldKind.dropdown,
               options: ClinicPurposes.bodySites,
               required: true,
               width: FieldWidth.half,
-            ),
-            ServiceField(
-              key: 'body_part_other',
-              label: 'Other Location',
-              kind: ServiceFieldKind.text,
-              width: FieldWidth.half,
-              shownWhenKey: 'body_part',
-              shownWhenValues: ['Other'],
-              note: "The clinic's own words, by name.",
+              shownWhenPredicate: (data) => !firstAidIsIllness(data),
             ),
             ServiceField(
               key: 'findings',
-              label: 'Observed Condition',
+              label: 'What you see (Findings)',
               kind: ServiceFieldKind.checkboxes,
               options: kFirstAidFindings,
+              optionsBuilder: firstAidFindingsFor,
               required: true,
-              allowCustomEntries: true,
-              note: 'Tick what you can see. Tick "Other" to type your own.',
+              note: 'Tick what you see.',
             ),
             ServiceField(
               key: 'pain_level',
-              label: 'Pain Level',
+              label: 'Pain level (0 = none, 10 = worst)',
               kind: ServiceFieldKind.number,
               unit: '/10',
               required: true,
@@ -2018,33 +2168,24 @@ class VisitServiceForms {
             ),
             ServiceField(
               key: 'head_injury_signs',
-              label: 'Head Injury Check',
+              label: 'Head injury check',
               kind: ServiceFieldKind.checkboxes,
               options: kFirstAidHeadSigns,
               required: true,
-              shownWhenPredicate: (data) {
-                final incident = _strOf(data['incident']);
-                if (incident == 'Head Injury') return true;
-                final site = _strOf(data['body_part']);
-                return incident == 'Fall' && (site == 'Head' || site == 'Face');
-              },
-              note: 'Ask, look, and tick. Any sign other than "None of these" '
-                  'refers.',
+              shownWhenPredicate: firstAidIsHeadCase,
+              note: 'Any sign needs a doctor.',
             ),
             ServiceField(
               key: 'consciousness',
-              label: 'Consciousness',
+              otherOption: false,
+              label: 'Level of consciousness',
               kind: ServiceFieldKind.chips,
               options: kFirstAidConsciousness,
               required: true,
               width: FieldWidth.half,
               shownWhenPredicate: (data) {
                 final incident = _strOf(data['incident']);
-                if (incident == 'Head Injury' || incident == 'Fainting') {
-                  return true;
-                }
-                final site = _strOf(data['body_part']);
-                return incident == 'Fall' && (site == 'Head' || site == 'Face');
+                return incident == 'Fainting' || firstAidIsHeadCase(data);
               },
             ),
           ],
@@ -2056,85 +2197,62 @@ class VisitServiceForms {
               key: 'vitals_card',
               label: 'Visit Vitals',
               kind: ServiceFieldKind.vitalsCard,
+              shownWhenPredicate: firstAidNeedsVitals,
+              note: 'Needed for this kind of incident.',
             ),
             ServiceField(
               key: 'treatment',
-              label: 'Treatment / First Aid Performed',
+              label: 'First aid given',
               kind: ServiceFieldKind.checkboxes,
               options: kFirstAidTreatments,
+              optionsBuilder: firstAidTreatmentsFor,
               required: true,
-              allowCustomEntries: true,
-              note: 'Tick at least one. Tick "Other" to type what you did. '
-                  '"First Aid Treatment" with nothing on it is an attendance, '
-                  'not a treatment.',
+              note: 'Tick what was done. Wound care goes in Wound Dressing.',
             ),
             ServiceField(
-              key: 'dressing_material',
-              label: 'Dressing Material',
-              kind: ServiceFieldKind.dropdown,
-              options: kDressingMaterialsUsed,
-              required: true,
+              key: 'known_allergies',
+              otherOption: false,
+              label: 'Known allergies',
+              kind: ServiceFieldKind.text,
               width: FieldWidth.half,
               shownWhenKey: 'treatment',
-              shownWhenValues: ['Wound Dressing'],
-            ),
-            ServiceField(
-              key: 'dressing_material_other',
-              label: 'Other Dressing Material',
-              kind: ServiceFieldKind.text,
-              required: true,
-              width: FieldWidth.half,
-              shownWhenKey: 'dressing_material',
-              shownWhenValues: ['Other'],
-              note: "The clinic's own material, by name.",
+              shownWhenValues: ['Basic Medication Given'],
+              note: 'Ask before giving medicine.',
             ),
             ServiceField(
               key: 'medication_given',
-              label: 'Medication Given',
+              label: 'Medicine given (name and dose)',
               kind: ServiceFieldKind.text,
-              required: true,
+              width: FieldWidth.half,
               shownWhenKey: 'treatment',
               shownWhenValues: ['Basic Medication Given'],
-              note:
-                  'Name and dose — a record of what was given. To take it off '
-                  'the shelf, use the card below; stock is deducted there.',
             ),
             ServiceField(
               key: 'medication_card',
-              label: 'Medication',
+              label: 'Medication from clinic stock',
               kind: ServiceFieldKind.medicationCard,
+              shownWhenKey: 'treatment',
+              shownWhenValues: ['Basic Medication Given'],
+              note: 'Optional. Deducts from clinic stock.',
             ),
             ServiceField(
               key: 'observation_minutes',
-              label: 'Observation Time',
+              label: 'Minutes rested',
               kind: ServiceFieldKind.number,
               unit: 'min',
               width: FieldWidth.half,
               shownWhenKey: 'treatment',
               shownWhenValues: ['Rest / Observation'],
               validate: _vitalWhole(0, 600),
-              note: 'Optional — how long they rested here.',
             ),
             ServiceField(
               key: 'wound_hint',
-              label: 'This looks like a dressing-room case',
+              label: 'Wound care',
               kind: ServiceFieldKind.linkServiceCard,
               opensService: 'wound_dressing',
               buttonLabel: 'Open Wound Dressing',
-              shownWhenPredicate: (data) {
-                final incident = _strOf(data['incident']);
-                if (incident == 'Wound' ||
-                    incident == 'Bleeding' ||
-                    incident == 'Burn') {
-                  return true;
-                }
-                final findings = _strListOf(data['findings']);
-                return findings.contains('Wound / Open Skin') ||
-                    findings.contains('Burn');
-              },
-              note: 'The wound form records the wound itself — type, size, '
-                  'cleaning and dressing — and this form only the first aid '
-                  'around it.',
+              shownWhenPredicate: firstAidSuggestsWoundCare,
+              note: 'Matching answers are filled in for you. Optional.',
             ),
           ],
         ),
@@ -2143,34 +2261,34 @@ class VisitServiceForms {
           fields: [
             ServiceField(
               key: 'condition_after',
-              label: 'Condition After Treatment',
+              otherOption: false,
+              label: 'Condition after first aid',
               kind: ServiceFieldKind.dropdown,
               options: kConditionAfterTreatment,
               required: true,
               width: FieldWidth.half,
-              note: 'How they were afterwards. Not a diagnosis.',
             ),
             ServiceField(
               key: 'disposition',
-              label: 'Disposition / Next Action',
+              label: 'What happens next',
               kind: ServiceFieldKind.chips,
               options: kFirstAidDispositions,
               required: true,
-              note: 'One. This is the handover line the next person reads.',
+              note: 'Pick one.',
             ),
             ServiceField(
               key: 'guardian_informed',
+              otherOption: false,
               label: 'Parent / Guardian informed?',
               kind: ServiceFieldKind.chips,
               options: kFirstAidGuardian,
               required: true,
               width: FieldWidth.half,
-              requiredWhen: (data) {
+              shownWhenPredicate: (data) {
                 final disposition = _strOf(data['disposition']);
                 return disposition == 'Sent Home' ||
                     isReferralDisposition(disposition);
               },
-              note: 'Owed when someone is sent home or referred.',
             ),
             ServiceField(
               key: 'referred_to_where',
@@ -2179,35 +2297,40 @@ class VisitServiceForms {
               required: true,
               shownWhenPredicate: (data) =>
                   isReferralDisposition(_strOf(data['disposition'])),
-              note: 'Where they were referred, and to whom.',
+            ),
+            ServiceField(
+              key: 'referral_reason',
+              label: 'Reason for referral',
+              kind: ServiceFieldKind.text,
+              shownWhenPredicate: (data) =>
+                  isReferralDisposition(_strOf(data['disposition'])),
             ),
             ServiceField(
               key: 'sent_to',
-              label: 'Sent Home With',
+              label: 'Sent home with',
               kind: ServiceFieldKind.text,
               required: true,
               shownWhenKey: 'disposition',
               shownWhenValues: ['Sent Home'],
-              note: 'Who took them home.',
+              note: 'Who took the student home.',
             ),
             ServiceField(
               key: 'follow_up_date',
-              label: 'Follow-up Date',
+              label: 'Follow-up date',
               kind: ServiceFieldKind.date,
               width: FieldWidth.half,
               shownWhenKey: 'disposition',
               shownWhenValues: ['Follow-up'],
               shownWhen: FieldCondition.startsWith,
-              note:
-                  'Optional — leave blank when the follow-up has no date yet.',
             ),
             ServiceField(
-              key: 'referral_reason',
-              label: 'Referral Reason',
-              kind: ServiceFieldKind.text,
-              shownWhenKey: 'disposition',
-              shownWhenValues: ['Referred to'],
-              shownWhen: FieldCondition.startsWith,
+              key: 'consult_link',
+              label: 'Doctor-level check',
+              kind: ServiceFieldKind.linkServiceCard,
+              opensService: 'medicine_consultation',
+              buttonLabel: 'Open Medical Consultation',
+              shownWhenPredicate: firstAidSuggestsConsultation,
+              note: 'For a doctor-level check. Optional.',
             ),
             notes(),
           ],
@@ -2223,72 +2346,40 @@ class VisitServiceForms {
           fields: [
             ServiceField(
               key: 'injury_timing',
-              label: 'When Did It Happen?',
+              label: 'When did it happen?',
               kind: ServiceFieldKind.dropdown,
               options: kWoundInjuryTiming,
               required: true,
               width: FieldWidth.half,
             ),
             ServiceField(
-              key: 'injury_timing_other',
-              label: 'Other Timing (specify)',
-              kind: ServiceFieldKind.text,
-              required: true,
-              width: FieldWidth.half,
-              shownWhenKey: 'injury_timing',
-              shownWhenValues: ['Other'],
-              note: 'When it happened, in your own words.',
-            ),
-            ServiceField(
               key: 'injury_cause',
-              label: 'How It Happened',
+              label: 'How did it happen?',
               kind: ServiceFieldKind.text,
               width: FieldWidth.half,
               hint: 'e.g. Fell on the court',
               validate: _cappedLength(100, 'this note'),
-              note: 'Optional. In your own words.',
             ),
             ServiceField(
               key: 'wound_location',
-              label: 'Location of the Wound',
+              label: 'Where on the body? (Location)',
               kind: ServiceFieldKind.dropdown,
               options: ClinicPurposes.bodySites,
               required: true,
               width: FieldWidth.half,
             ),
             ServiceField(
-              key: 'wound_location_other',
-              label: 'Other Location (specify)',
-              kind: ServiceFieldKind.text,
-              required: true,
-              width: FieldWidth.half,
-              shownWhenKey: 'wound_location',
-              shownWhenValues: ['Other'],
-              note: 'Where the wound is, in your own words. This is what the '
-                  'record keeps, not the word "Other".',
-            ),
-            ServiceField(
               key: 'wound_type',
-              label: 'Wound Type',
+              label: 'Wound type',
               kind: ServiceFieldKind.dropdown,
               options: kWoundTypes,
               required: true,
               width: FieldWidth.half,
             ),
             ServiceField(
-              key: 'wound_type_other',
-              label: 'Other Wound Type (specify)',
-              kind: ServiceFieldKind.text,
-              required: true,
-              width: FieldWidth.half,
-              shownWhenKey: 'wound_type',
-              shownWhenValues: ['Other'],
-              note: 'The type of wound, in your own words. This is what the '
-                  'record keeps, not the word "Other".',
-            ),
-            ServiceField(
               key: 'burn_degree',
-              label: 'Burn Degree',
+              otherOption: false,
+              label: 'Burn degree',
               kind: ServiceFieldKind.chips,
               options: kBurnDegrees,
               required: true,
@@ -2297,175 +2388,79 @@ class VisitServiceForms {
               shownWhenValues: ['Burn'],
             ),
             ServiceField(
-              key: 'burn_degree_other',
-              label: 'Other Burn Degree (specify)',
-              kind: ServiceFieldKind.text,
-              required: true,
-              width: FieldWidth.half,
-              shownWhenKey: 'burn_degree',
-              shownWhenValues: ['Other'],
-              note: 'The degree, in your own words.',
-            ),
-            ServiceField(
               key: 'wound_condition',
-              label: 'Wound Condition',
+              label: 'Wound condition',
               kind: ServiceFieldKind.chips,
               options: kWoundConditions,
               required: true,
               width: FieldWidth.half,
             ),
             ServiceField(
-              key: 'wound_condition_other',
-              label: 'Other Condition (specify)',
-              kind: ServiceFieldKind.text,
-              required: true,
-              width: FieldWidth.half,
-              shownWhenKey: 'wound_condition',
-              shownWhenValues: ['Other'],
-              note: 'The condition, in your own words.',
-            ),
-            ServiceField(
               key: 'bleeding',
+              otherOption: false,
               label: 'Bleeding',
               kind: ServiceFieldKind.chips,
               options: kBleedingStatus,
               required: true,
               width: FieldWidth.half,
-            ),
-            ServiceField(
-              key: 'bleeding_other',
-              label: 'Other Bleeding (specify)',
-              kind: ServiceFieldKind.text,
-              required: true,
-              width: FieldWidth.half,
-              shownWhenKey: 'bleeding',
-              shownWhenValues: ['Other'],
-              note: 'Describe the bleeding, in your own words.',
-            ),
-            ServiceField(
-              key: 'wound_length_cm',
-              label: 'Length (cm)',
-              kind: ServiceFieldKind.number,
-              unit: 'cm',
-              width: FieldWidth.half,
-              hint: 'e.g. 3',
-              validate: _woundMeasurement(),
-            ),
-            ServiceField(
-              key: 'wound_width_cm',
-              label: 'Width (cm)',
-              kind: ServiceFieldKind.number,
-              unit: 'cm',
-              width: FieldWidth.half,
-              hint: 'e.g. 1.5',
-              validate: _woundMeasurement(),
+              shownWhenKey: 'wound_type',
+              shownWhenValues: ['Burn', 'Blister'],
+              shownWhen: FieldCondition.noneOf,
             ),
             ServiceField(
               key: 'vitals_card',
               label: 'Visit Vitals (Temperature / Blood Pressure)',
               kind: ServiceFieldKind.vitalsCard,
               width: FieldWidth.full,
-              note: 'Taken once for the visit on the Vital Signs service — '
-                  'read-only here.',
+              shownWhenPredicate: woundNeedsVitals,
+              note: 'For infected wounds or deep burns.',
             ),
             ServiceField(
               key: 'tetanus_status',
-              label: 'Tetanus Shot Up to Date?',
+              otherOption: false,
+              label: 'Tetanus shot up to date?',
               kind: ServiceFieldKind.chips,
               options: kTetanusStatus,
               width: FieldWidth.half,
-              shownWhenPredicate: (data) {
-                final types = _answersOf(data['wound_type']);
-                final conds = _answersOf(data['wound_condition']);
-                return types.any(kWoundTetanusTypes.contains) ||
-                    conds.any(kWoundTetanusConditions.contains);
-              },
-              note:
-                  'Optional. Asked because these wounds carry a tetanus risk.',
+              shownWhenPredicate: woundNeedsTetanusCheck,
+              note: 'This wound type can cause tetanus.',
             ),
           ],
         ),
         ServiceSlide(
           title: 'Cleaning & Dressing',
-          groups: [
-            FieldGroup(['cleaning_performed', 'cleaning_performed_other']),
-            FieldGroup(['dressing_applied', 'dressing_applied_other']),
-            FieldGroup(['assessment', 'assessment_other']),
-            FieldGroup(['action_taken', 'action_taken_other']),
-          ],
           fields: [
             ServiceField(
               key: 'cleaning_performed',
-              label: 'Cleaning Performed',
+              label: 'How the wound was cleaned',
               kind: ServiceFieldKind.checkboxes,
               options: kWoundCleaningPerformed,
+              optionsBuilder: woundCleaningFor,
               required: true,
-              note: 'Tick at least one.',
-            ),
-            ServiceField(
-              key: 'cleaning_performed_other',
-              label: 'Other Cleaning Used',
-              kind: ServiceFieldKind.text,
-              required: true,
-              width: FieldWidth.half,
-              shownWhenKey: 'cleaning_performed',
-              shownWhenValues: ['Other'],
-              note: 'The clinic\'s own prep, by name.',
             ),
             ServiceField(
               key: 'dressing_applied',
-              label: 'Dressing Applied',
+              label: 'Dressing used',
               kind: ServiceFieldKind.checkboxes,
               options: kWoundDressingMaterials,
               required: true,
-              note: 'Tick at least one.',
-            ),
-            ServiceField(
-              key: 'dressing_applied_other',
-              label: 'Other Dressing Used',
-              kind: ServiceFieldKind.text,
-              required: true,
-              width: FieldWidth.half,
-              shownWhenKey: 'dressing_applied',
-              shownWhenValues: ['Other'],
-              note: 'The clinic\'s own material, by name.',
             ),
             ServiceField(
               key: 'assessment',
-              label: 'Assessment / Findings',
+              label: 'What you see (Findings)',
               kind: ServiceFieldKind.checkboxes,
               options: kWoundFindings,
+              optionsBuilder: woundFindingsFor,
               required: true,
-              note: 'Tick at least one. Observations only - a diagnosis is a '
-                  'separate service.',
-            ),
-            ServiceField(
-              key: 'assessment_other',
-              label: 'Other Finding (specify)',
-              kind: ServiceFieldKind.text,
-              required: true,
-              width: FieldWidth.half,
-              shownWhenKey: 'assessment',
-              shownWhenValues: ['Other'],
-              note: 'The finding, in your own words.',
+              note: 'Only what you see. No diagnosis.',
             ),
             ServiceField(
               key: 'action_taken',
-              label: 'Action Taken',
+              label: 'What was done (Action taken)',
               kind: ServiceFieldKind.checkboxes,
               options: kWoundActions,
               required: true,
-              note: 'Tick at least one.',
-            ),
-            ServiceField(
-              key: 'action_taken_other',
-              label: 'Other Action (specify)',
-              kind: ServiceFieldKind.text,
-              required: true,
-              width: FieldWidth.half,
-              shownWhenKey: 'action_taken',
-              shownWhenValues: ['Other'],
-              note: 'What was done, in your own words.',
+              note: 'Tick Follow-up set to add a next dressing date.',
             ),
             ServiceField(
               key: 'referred_to',
@@ -2475,51 +2470,32 @@ class VisitServiceForms {
               width: FieldWidth.half,
               shownWhenKey: 'action_taken',
               shownWhenValues: ['Referred to Hospital/RHU'],
-              note: 'Required when a referral is recorded above.',
             ),
             ServiceField(
               key: 'no_further_dressing',
-              label: 'Dressing Plan',
+              otherOption: false,
+              label: 'Dressing plan',
               kind: ServiceFieldKind.chips,
               options: const [kWoundNoFurtherDressing],
               width: FieldWidth.half,
-              note: 'Tick when this wound needs no further dressing.',
+              shownWhenPredicate: (data) => !woundNeedsNextDressing(data),
+              note: 'Tick if no more dressing is needed.',
             ),
             ServiceField(
               key: 'next_dressing_date',
-              label: 'Next Dressing Date',
+              label: 'Next dressing date',
               kind: ServiceFieldKind.date,
               width: FieldWidth.half,
               required: true,
-              shownWhenKey: 'no_further_dressing',
-              shownWhenValues: const [kWoundNoFurtherDressing],
-              shownWhen: FieldCondition.noneOf,
-              requiredWhen: (data) {
-                final conds = _answersOf(data['wound_condition']);
-                final acts = _answersOf(data['action_taken']);
-                return conds.contains('Infected') ||
-                    conds.contains('Healing') ||
-                    acts.contains('Follow-up scheduled');
-              },
-              note: 'Required for an infected or healing wound, or a booked '
-                  'follow-up. Today or later only.',
-            ),
-            ServiceField(
-              key: 'other_medication',
-              label: 'Other Medication / Antiseptic',
-              kind: ServiceFieldKind.text,
-              width: FieldWidth.half,
-              hint: 'e.g. Betadine swab',
-              note: 'Optional. Anything applied that is not a prescription and '
-                  'not named on the Medication service.',
+              shownWhenPredicate: woundNeedsNextDressing,
+              note: 'Today or later.',
             ),
             ServiceField(
               key: 'medication_card',
-              label: 'Medication / Antiseptic Given',
+              label: 'Medicine given (optional)',
               kind: ServiceFieldKind.medicationCard,
               width: FieldWidth.full,
-              note: 'Recorded once for the visit on the Medication service — '
-                  'read-only here.',
+              note: 'Only medicine from clinic stock, e.g. ointment.',
             ),
             notes(),
           ],
@@ -2538,48 +2514,37 @@ class VisitServiceForms {
           fields: [
             ServiceField(
               key: 'chief_complaint',
-              label: 'Chief Complaint',
+              label: 'Chief complaint',
               kind: ServiceFieldKind.text,
               required: true,
               validate: _cappedLength(150, 'the complaint'),
-              note:
-                  'In the patient\'s own words. "Headache and dizziness for 2 '
-                  'days" is the complaint; none of the boxes below is.',
+              note: 'Main problem, in the patient\'s words.',
             ),
             ServiceField(
               key: 'symptoms',
-              label: 'Common Complaints',
+              otherKey: 'symptom_other',
+              label: 'Common complaints (tick if any)',
               kind: ServiceFieldKind.checkboxes,
               options: kConsultationComplaints,
-              note: 'Optional. A shortcut for the box above.',
-            ),
-            ServiceField(
-              key: 'symptom_other',
-              label: 'Other Complaint (specify)',
-              kind: ServiceFieldKind.text,
-              required: true,
-              width: FieldWidth.half,
-              shownWhenKey: 'symptoms',
-              shownWhenValues: ['Other'],
             ),
             ServiceField(
               key: 'duration_onset_choice',
-              label: 'Duration / Onset',
+              otherOption: false,
+              label: 'How long',
               kind: ServiceFieldKind.chips,
               options: kConsultationDuration,
               width: FieldWidth.half,
-              note: 'Optional. The box beside it takes the exact words.',
             ),
             ServiceField(
               key: 'duration_onset',
-              label: 'Duration / Onset (exact)',
+              label: 'Exact time',
               kind: ServiceFieldKind.text,
               hint: 'e.g. started 2 days ago',
               width: FieldWidth.half,
             ),
             ServiceField(
               key: 'additional_complaint',
-              label: 'Additional Complaint / Description',
+              label: 'More about the complaint',
               kind: ServiceFieldKind.text,
             ),
           ],
@@ -2591,35 +2556,27 @@ class VisitServiceForms {
               key: 'vitals_card',
               label: 'Visit Vitals',
               kind: ServiceFieldKind.vitalsCard,
-              note: 'Taken once for the visit on the Vital Signs service — '
-                  'read-only here.',
+              note: 'Taken in Vital Signs. Read only here.',
             ),
             ServiceField(
               key: 'history',
-              label: 'Relevant History / Symptoms',
+              label: 'Related history',
               kind: ServiceFieldKind.checkboxes,
               options: kConsultationHistory,
-              note: 'Optional.',
-            ),
-            ServiceField(
-              key: 'history_other',
-              label: 'Other History (specify)',
-              kind: ServiceFieldKind.text,
-              shownWhenKey: 'history',
-              shownWhenValues: ['Other'],
             ),
             ServiceField(
               key: 'lmp_concern',
-              label: 'Menstrual Concern',
+              otherOption: false,
+              label: 'Menstrual concern',
               kind: ServiceFieldKind.checkboxes,
               options: const ['LMP / menstruation concern'],
               shownWhenPredicate: (data) =>
                   '${data['visitor_sex'] ?? ''}'.trim().toLowerCase() ==
                   'female',
-              note: 'Optional. Shown for female students only.',
             ),
             ServiceField(
               key: 'known_allergies',
+              otherOption: false,
               label: 'Known allergies?',
               kind: ServiceFieldKind.chips,
               options: kYesNoUnknown,
@@ -2627,7 +2584,7 @@ class VisitServiceForms {
             ),
             ServiceField(
               key: 'allergy_specify',
-              label: 'Allergy (specify)',
+              label: 'Allergic to what?',
               kind: ServiceFieldKind.text,
               required: true,
               width: FieldWidth.half,
@@ -2636,9 +2593,9 @@ class VisitServiceForms {
             ),
             ServiceField(
               key: 'history_details',
-              label: 'History Details',
+              label: 'History details',
               kind: ServiceFieldKind.multiline,
-              note: 'Medications, allergies, past illnesses, pregnancy.',
+              note: 'Medicines taken, past illness, pregnancy.',
             ),
           ],
         ),
@@ -2647,32 +2604,29 @@ class VisitServiceForms {
           fields: [
             ServiceField(
               key: 'physical_exam',
-              label: 'Physical Examination / Findings',
+              label: 'Physical exam findings',
               kind: ServiceFieldKind.multiline,
               required: true,
             ),
             ServiceField(
               key: 'clinical_impression',
-              label: 'Clinical Impression',
+              label: 'Clinical impression',
               kind: ServiceFieldKind.multiline,
               required: true,
-              note: 'Entered by the clinician. Nothing on this form works this '
-                  'out for you.',
+              note: 'The clinician\'s working diagnosis.',
             ),
             ServiceField(
               key: 'secondary_diagnosis',
-              label: 'Secondary Diagnosis / Condition',
+              label: 'Other condition found',
               kind: ServiceFieldKind.text,
-              note: 'Optional.',
             ),
             ServiceField(
               key: 'red_flags',
-              label: 'Red-flag Check',
+              label: 'Danger signs',
               kind: ServiceFieldKind.checkboxes,
               options: kConsultationRedFlags,
               required: true,
-              note: 'Tick every sign present — or "None". Each flag except '
-                  '"None" raises a referral.',
+              note: 'Tick all present, or None. Any sign means referral.',
             ),
           ],
         ),
@@ -2681,40 +2635,26 @@ class VisitServiceForms {
           fields: [
             ServiceField(
               key: 'treatment',
-              label: 'Treatment / Management Provided',
+              label: 'Treatment given',
               kind: ServiceFieldKind.checkboxes,
               options: kConsultationTreatment,
               required: true,
-              note: 'Tick at least one.',
-            ),
-            ServiceField(
-              key: 'treatment_other',
-              label: 'Other Treatment (specify)',
-              kind: ServiceFieldKind.text,
-              required: true,
-              width: FieldWidth.half,
-              shownWhenKey: 'treatment',
-              shownWhenValues: ['Other'],
             ),
             ServiceField(
               key: 'medication_card',
-              label: 'Medication Service',
+              label: 'Medication',
               kind: ServiceFieldKind.medicationCard,
               shownWhenKey: 'treatment',
               shownWhenValues: ['Medication'],
-              note: 'Naming a drug here does not prescribe it. Open Medication '
-                  'to prescribe — that is the form that takes it off the '
-                  'shelf.',
+              note: 'Give it in Medication to deduct stock.',
             ),
             ServiceField(
               key: 'medication_summary',
-              label: 'Medication Intended',
+              label: 'Medicine planned (name and dose)',
               kind: ServiceFieldKind.text,
               width: FieldWidth.half,
               shownWhenKey: 'treatment',
               shownWhenValues: ['Medication'],
-              note: 'Optional, record only. Name and dose — what you intend to '
-                  'prescribe.',
             ),
             ServiceField(
               key: 'wound_link',
@@ -2724,7 +2664,17 @@ class VisitServiceForms {
               buttonLabel: 'Open Wound Dressing',
               shownWhenKey: 'treatment',
               shownWhenValues: ['Wound Care'],
-              note: 'For a detailed wound record, use Wound Dressing.',
+              note: 'For a full wound record. Optional.',
+            ),
+            ServiceField(
+              key: 'first_aid_link',
+              label: 'First Aid',
+              kind: ServiceFieldKind.linkServiceCard,
+              opensService: 'first_aid_treatment',
+              buttonLabel: 'Open First Aid Treatment',
+              shownWhenKey: 'symptoms',
+              shownWhenValues: ['Injury', 'Nosebleed'],
+              note: 'Records on-the-spot care. Optional.',
             ),
             ServiceField(
               key: 'rest_minutes',
@@ -2739,7 +2689,7 @@ class VisitServiceForms {
             ),
             ServiceField(
               key: 'management_details',
-              label: 'Treatment Details',
+              label: 'Treatment details',
               kind: ServiceFieldKind.multiline,
               note: 'What was actually done.',
             ),
@@ -2750,38 +2700,53 @@ class VisitServiceForms {
           fields: [
             ServiceField(
               key: 'disposition',
-              label: 'Disposition',
+              label: 'What happens next',
               kind: ServiceFieldKind.chips,
               options: kConsultationDispositions,
               required: true,
-              note: 'One. This is the handover line the next person reads.',
+              note: 'Pick one.',
             ),
             ServiceField(
               key: 'sent_home_with',
-              label: 'Accompanied by',
+              label: 'Sent home with',
               kind: ServiceFieldKind.text,
               width: FieldWidth.half,
               shownWhenKey: 'disposition',
               shownWhenValues: ['Sent Home'],
-              note: 'Optional. Who took them home.',
             ),
             ServiceField(
               key: 'guardian_informed',
+              otherOption: false,
               label: 'Parent / Guardian informed?',
               kind: ServiceFieldKind.chips,
               options: kYesNo,
               required: true,
               width: FieldWidth.half,
-              requiredWhen: (data) {
+              shownWhenPredicate: (data) {
                 final disposition = _strOf(data['disposition']);
                 return disposition == 'Sent Home' ||
                     kConsultationReferralDispositions.contains(disposition);
               },
-              note: 'Owed when someone is sent home or referred.',
+            ),
+            ServiceField(
+              key: 'referred_to',
+              label: 'Which hospital / clinic / doctor?',
+              kind: ServiceFieldKind.text,
+              required: true,
+              shownWhenPredicate: (data) => kConsultationReferralDispositions
+                  .contains(_strOf(data['disposition'])),
+            ),
+            ServiceField(
+              key: 'referral_reason',
+              label: 'Reason for referral',
+              kind: ServiceFieldKind.text,
+              shownWhenPredicate: (data) => kConsultationReferralDispositions
+                  .contains(_strOf(data['disposition'])),
             ),
             ServiceField(
               key: 'follow_up_needed',
-              label: 'Follow-up Needed?',
+              otherOption: false,
+              label: 'Follow-up needed?',
               kind: ServiceFieldKind.chips,
               options: kYesNo,
               required: true,
@@ -2789,30 +2754,28 @@ class VisitServiceForms {
             ),
             ServiceField(
               key: 'follow_up_date',
-              label: 'Follow-up Date',
+              label: 'Follow-up date',
               kind: ServiceFieldKind.date,
               width: FieldWidth.half,
               shownWhenKey: 'follow_up_needed',
               shownWhenValues: ['Yes'],
               validate: _notPastDate('follow-up date'),
-              note:
-                  'Optional — leave blank when the follow-up has no date yet.',
             ),
             ServiceField(
               key: 'follow_up_instructions',
-              label: 'Follow-up Instructions',
+              label: 'Follow-up instructions',
               kind: ServiceFieldKind.text,
               shownWhenKey: 'follow_up_needed',
               shownWhenValues: ['Yes'],
             ),
             ServiceField(
               key: 'excuse_slip_needed',
+              otherOption: false,
               label: 'Excuse slip needed?',
               kind: ServiceFieldKind.chips,
               options: kYesNo,
               width: FieldWidth.half,
-              note: 'Optional. Stored with the record; the certificate form '
-                  'prints the document.',
+              note: 'Printed in Medical Certificate.',
             ),
             ServiceField(
               key: 'excuse_days',
@@ -2831,61 +2794,7 @@ class VisitServiceForms {
               kind: ServiceFieldKind.dropdown,
               options: kAttendingStaff,
               width: FieldWidth.half,
-              note: 'Who examined them.',
-            ),
-            notes(),
-          ],
-        ),
-        ServiceSlide(
-          title: 'Referral / Additional Service',
-          fields: [
-            ServiceField(
-              key: 'referral_needed',
-              label: 'Referral / Additional Service Needed?',
-              kind: ServiceFieldKind.chips,
-              options: kYesNo,
-              required: true,
-              width: FieldWidth.half,
-              note: 'Records it and offers the button below. It does not send '
-                  'anyone anywhere by itself.',
-            ),
-            ServiceField(
-              key: 'referral_service',
-              label: 'Service / Referral',
-              kind: ServiceFieldKind.dropdown,
-              options: kConsultationReferralServices,
-              required: true,
-              width: FieldWidth.half,
-              shownWhenKey: 'referral_needed',
-              shownWhenValues: ['Yes'],
-            ),
-            ServiceField(
-              key: 'referral_link',
-              label: 'Add this service to the visit',
-              kind: ServiceFieldKind.linkServiceCard,
-              linkFromKey: 'referral_service',
-              buttonLabel: 'Add this service to the visit',
-              shownWhenKey: 'referral_needed',
-              shownWhenValues: ['Yes'],
-              note: 'Ticks the service onto the visit and opens its form.',
-            ),
-            ServiceField(
-              key: 'referred_to',
-              label: 'Referred to (name or place)',
-              kind: ServiceFieldKind.text,
-              required: true,
-              shownWhenPredicate: (data) =>
-                  _strListOf(data['referral_needed']).contains('Yes') &&
-                  kConsultationNamedReferralTargets
-                      .contains(_strOf(data['referral_service'])),
-            ),
-            ServiceField(
-              key: 'referral_reason',
-              label: 'Reason',
-              kind: ServiceFieldKind.text,
-              required: true,
-              shownWhenKey: 'referral_needed',
-              shownWhenValues: ['Yes'],
+              note: 'Who examined the patient.',
             ),
             ServiceField(
               key: 'counselling_link',
@@ -2909,9 +2818,9 @@ class VisitServiceForms {
                   'suicid',
                 ].any(words.contains);
               },
-              note: 'The complaint suggests a counselling session may help. '
-                  'Suggestion only.',
+              note: 'Counselling may help. Optional.',
             ),
+            notes(),
           ],
         ),
         VisitServiceForms.reviewSlide,
@@ -2929,6 +2838,7 @@ class VisitServiceForms {
     ),
     'vital_signs': ServiceFormSpec(
       serviceId: 'vital_signs',
+      allowOther: false,
       crossValidate: _vitalSignsCrossRules,
       slides: [
                 ServiceSlide(
@@ -2950,8 +2860,7 @@ class VisitServiceForms {
               kind: ServiceFieldKind.checkboxes,
               options: const [kSelectAllLabel, ...kVitalChoices],
               required: true,
-              note: 'Tick what you are taking. Only ticked items are asked '
-                  'for and saved; the rest are saved empty.',
+              note: 'Tick the vitals to take. Unticked ones are saved empty.',
             ),
             // ---- Blood pressure ----
             ServiceField(
@@ -3007,7 +2916,7 @@ class VisitServiceForms {
               width: FieldWidth.half,
               shownWhenKey: kVitalsSelectedKey,
               shownWhenValues: const ['Blood Pressure'],
-              note: 'Single reading is a screening result, not a diagnosis.',
+              note: 'One reading is a screening, not a diagnosis.',
             ),
             // ---- Temperature ----
             ServiceField(
@@ -3033,8 +2942,7 @@ class VisitServiceForms {
               width: FieldWidth.half,
               shownWhenKey: kVitalsSelectedKey,
               shownWhenValues: const ['Temperature'],
-              note: 'Readings vary by method; axillary reads ~0.3–0.5 °C '
-                  'lower than oral.',
+              note: 'Underarm reads about 0.3–0.5 °C lower than oral.',
             ),
             ServiceField(
               key: 'temp_assessment',
@@ -3043,7 +2951,7 @@ class VisitServiceForms {
               width: FieldWidth.half,
               shownWhenKey: kVitalsSelectedKey,
               shownWhenValues: const ['Temperature'],
-              note: 'Worked out from the temperature entered above.',
+              note: 'Calculated from the temperature.',
             ),
             // ---- Pulse ----
             ServiceField(
@@ -3056,9 +2964,8 @@ class VisitServiceForms {
               width: FieldWidth.half,
               shownWhenKey: kVitalsSelectedKey,
               shownWhenValues: const ['Pulse'],
-              note: 'Whole beats per minute, '
-                  '${VitalClassifier.pulseMin}–${VitalClassifier.pulseMax}. '
-                  'The classification fills in from the number.',
+              note: 'Beats per minute '
+                  '(${VitalClassifier.pulseMin}–${VitalClassifier.pulseMax}).',
               validate: _vitalWhole(
                   VitalClassifier.pulseMin, VitalClassifier.pulseMax),
             ),
@@ -3069,7 +2976,7 @@ class VisitServiceForms {
               width: FieldWidth.half,
               shownWhenKey: kVitalsSelectedKey,
               shownWhenValues: const ['Pulse'],
-              note: 'Worked out from the pulse rate entered above.',
+              note: 'Calculated from the pulse.',
             ),
             // ---- Respiratory rate ----
             ServiceField(
@@ -3092,7 +2999,7 @@ class VisitServiceForms {
               width: FieldWidth.half,
               shownWhenKey: kVitalsSelectedKey,
               shownWhenValues: const ['Respiratory Rate'],
-              note: 'Worked out from the respiratory rate entered above.',
+              note: 'Calculated from the breathing rate.',
             ),
            
             // ---- Oxygen saturation ----
@@ -3116,7 +3023,7 @@ class VisitServiceForms {
               width: FieldWidth.half,
               shownWhenKey: kVitalsSelectedKey,
               shownWhenValues: const ['O₂ Saturation'],
-              note: 'Worked out from the oxygen saturation entered above.',
+              note: 'Calculated from the oxygen level.',
             ),
           ],
         ),
@@ -3129,17 +3036,16 @@ class VisitServiceForms {
               label: 'Action Taken',
               kind: ServiceFieldKind.checkboxes,
               options: kVitalActions,
-              note: 'Tick everything that applies to this check.',
+              note: 'Tick all that apply.',
             ),
             ServiceField(
-              key: 'action_taken_other',
-              label: 'Other Action',
-              kind: ServiceFieldKind.text,
-              required: true,
-              note: 'The action itself, in your own words. This is what the '
-                  'record keeps, not the word "Other".',
-              shownWhenKey: 'action_taken',
-              shownWhenValues: ['Other'],
+              key: 'consult_link',
+              label: 'Doctor-level check',
+              kind: ServiceFieldKind.linkServiceCard,
+              opensService: 'medicine_consultation',
+              buttonLabel: 'Open Medical Consultation',
+              shownWhenPredicate: vitalReadingsAbnormal,
+              note: 'A reading is abnormal. Optional.',
             ),
             ServiceField(
               key: 'referral_reason',

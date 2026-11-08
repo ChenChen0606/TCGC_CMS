@@ -142,26 +142,26 @@ String summaryValue(ServiceDraft draft, ServiceField field) {
     default:
       final raw = draft.text(field.key).trim();
 
-      if (raw == 'Other' &&
-          _foldedOtherKeys(draft).contains('${field.key}_other')) {
-        final other = draft.text('${field.key}_other').trim();
+      if (raw == kOtherLabel && _foldsOther(draft, field)) {
+        final other = draft.text(field.otherFieldKey).trim();
         if (other.isNotEmpty) return other;
       }
-      return raw;
+      return field.kind == ServiceFieldKind.dropdown ? optionLabel(raw) : raw;
   }
 }
 
+bool _foldsOther(ServiceDraft draft, ServiceField field) =>
+    draft.spec.offersOther(field) ||
+    _foldedOtherKeys(draft).contains(field.otherFieldKey);
+
 String _joinedChoices(ServiceDraft draft, ServiceField field) {
   final chosen = draft.chosen(field.key);
-  final otherKey = '${field.key}_other';
-  if (!_foldedOtherKeys(draft).contains(otherKey)) {
-    return chosen.join(' · ');
-  }
-  final other = draft.text(otherKey).trim();
-  if (other.isEmpty) return chosen.join(' · ');
+  final other = _foldsOther(draft, field)
+      ? draft.text(field.otherFieldKey).trim()
+      : '';
   return [
     for (final c in chosen)
-      if (c == 'Other') other else c,
+      if (c == kOtherLabel && other.isNotEmpty) other else optionLabel(c),
   ].join(' · ');
 }
 

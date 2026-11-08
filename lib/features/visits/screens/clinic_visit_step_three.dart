@@ -940,10 +940,15 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
         child: input,
       );
     }
+    final otherBox = _otherBox(d, f);
     final children = <Widget>[
       _fieldLabel(d, f, key),
       const SizedBox(height: 5),
       input,
+      if (otherBox != null) ...[
+        const SizedBox(height: 7),
+        otherBox,
+      ],
     ];
     final error = _fieldError(d, f, key);
     if (error != null) {
@@ -975,20 +980,88 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
     );
   }
 
+  bool _otherPicked(ServiceDraft d, ServiceField f) {
+    if (!d.spec.offersOther(f) || f.allowCustomEntries) return false;
+    final v = d.data[f.key];
+    return v is List
+        ? v.any((e) => '$e' == kOtherLabel)
+        : '${v ?? ''}' == kOtherLabel;
+  }
+
+  /// Opens when "Other" is picked. Red until something is typed. What is
+  /// typed is saved in the same record as the other answers.
+  Widget? _otherBox(ServiceDraft d, ServiceField f) {
+    if (!_otherPicked(d, f)) return null;
+    final box = ServiceField(
+      key: f.otherFieldKey,
+      label: 'Other',
+      kind: ServiceFieldKind.text,
+      maxChars: 100,
+    );
+    final controller = _textFor(d, box);
+    final empty = controller.text.trim().isEmpty;
+    final line = empty ? AppColors.danger : AppColors.border;
+    return Column(
+      key: ValueKey('field/${d.serviceId}/${f.otherFieldKey}'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        TextField(
+          controller: controller,
+          autofocus: empty,
+          inputFormatters: [LengthLimitingTextInputFormatter(100)],
+          onChanged: (value) => _onText(d, box, value),
+          style: const TextStyle(fontSize: 13, color: AppColors.textMain),
+          decoration: InputDecoration(
+            isDense: true,
+            filled: true,
+            fillColor: empty
+                ? AppColors.danger.withValues(alpha: 0.06)
+                : AppColors.surface,
+            hintText: 'Type the other answer',
+            hintStyle:
+                const TextStyle(fontSize: 13, color: AppColors.textMuted),
+            contentPadding:
+                const EdgeInsets.symmetric(horizontal: 12, vertical: 13),
+            border: _inputBorder(line, width: 1.5),
+            enabledBorder: _inputBorder(line, width: 1.5),
+            focusedBorder:
+                _inputBorder(empty ? AppColors.danger : AppColors.primary,
+                    width: 1.5),
+          ),
+        ),
+        if (empty)
+          const Padding(
+            padding: EdgeInsets.only(top: 3),
+            child: Text(
+              'Please type what \u201COther\u201D is.',
+              style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.danger),
+            ),
+          ),
+      ],
+    );
+  }
+
   String? _fieldError(ServiceDraft d, ServiceField f, String key) {
     final own = d.spec.validateInContext(f.key, d.data);
     if (own != null) return own;
     if (!f.isRequiredIn(d.data) || _isAnswered(d, f.key)) return null;
-    if (_showAllErrors || _naggedField == key) return '${f.label} is required.';
+    if (_showAllErrors || _naggedField == key) return '${f.label} needs a valid answer.';
     return null;
   }
 
   Color? _requiredTint(ServiceDraft d, ServiceField f) {
-    if (!f.isRequiredIn(d.data)) return null;
+    // Red only when a typed answer is not allowed.
+    if (f.isRequiredIn(d.data) && !_isAnswered(d, f.key)) {
+      return AppColors.danger;
+    }
+    // Green hint for a suggested box that is still empty. Never blocks.
+    if (!f.isSuggestedIn(d.data)) return null;
     if (_isAnswered(d, f.key)) return null;
-    return _naggedField == '${d.serviceId}/${f.key}'
-        ? AppColors.danger
-        : AppColors.warning;
+    return AppColors.primary;
   }
 
   static bool _isGroupField(ServiceFieldKind kind) =>
@@ -998,11 +1071,9 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
       kind == ServiceFieldKind.inventoryPick;
 
   Widget _fieldLabel(ServiceDraft d, ServiceField f, String key) {
-    final needed =
-        d.spec.requiredKeysIn(d.data).where((k) => !_isAnswered(d, k)).toList();
-
-    final owed = needed.contains(f.key);
-    final missing = owed && _naggedField == key;
+    final wrong = f.isRequiredIn(d.data) && !_isAnswered(d, f.key);
+    final owed = wrong || (f.isSuggestedIn(d.data) && !_isAnswered(d, f.key));
+    final missing = wrong;
     return Row(
       children: [
         Flexible(
@@ -1017,6 +1088,11 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
             ),
           ),
         ),
+        if (d.isAutoFilled(f.key))
+          const Padding(
+            padding: EdgeInsets.only(left: 6),
+            child: _AutoTag(),
+          ),
         if (owed)
           const Padding(
             padding: EdgeInsets.only(left: 4),
@@ -1026,7 +1102,7 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
                 fontSize: 14,
                 height: 1,
                 fontWeight: FontWeight.w800,
-                color: AppColors.danger,
+                color: AppColors.primary,
               ),
             ),
           ),
@@ -1034,11 +1110,11 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
           Padding(
             padding: const EdgeInsets.only(left: 6),
             child: Text(
-              missing ? 'needed to continue' : 'required',
+              missing ? 'please check' : 'suggested',
               style: TextStyle(
                 fontSize: 10.5,
                 fontWeight: FontWeight.w600,
-                color: missing ? AppColors.danger : AppColors.warning,
+                color: missing ? AppColors.danger : AppColors.primary,
               ),
             ),
           ),
@@ -1081,9 +1157,8 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
           SizedBox(width: 8),
           Expanded(
             child: Text(
-              'Records marked Restricted are seen only by Clinic Head and Clinic '
-              'Staff. Do not record anything here you would not want the '
-              'student\u2019s guardian to read.',
+              'Only the Clinic Head and Clinic Staff can see Restricted '
+              'records.',
               style: TextStyle(
                 fontSize: 12,
                 color: AppColors.textMuted,
@@ -1456,7 +1531,7 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
   }
 
   Widget _dropdownBox(ServiceDraft d, ServiceField f, String key) {
-    final options = f.options;
+    final options = d.spec.optionsFor(f, d.data);
     final current = d.text(f.key);
 
     final safe = current.isNotEmpty && !options.contains(current)
@@ -1473,7 +1548,7 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
         for (final o in safe)
           DropdownMenuItem(
             value: o,
-            child: Text(o,
+            child: Text(optionLabel(o),
                 overflow: TextOverflow.ellipsis,
                 style:
                     const TextStyle(fontSize: 13, color: AppColors.textMain)),
@@ -1497,9 +1572,9 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
       spacing: 7,
       runSpacing: 7,
       children: [
-        for (final o in f.options)
+        for (final o in d.spec.optionsFor(f, d.data))
           _optionChip(
-            label: o,
+            label: optionLabel(o),
             selected: chosen.contains(o),
             onTap: () {
               _c.toggleChoice(d.serviceId, f.key, o);
@@ -1522,9 +1597,9 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
       spacing: 7,
       runSpacing: 7,
       children: [
-        for (final o in f.options)
+        for (final o in d.spec.optionsFor(f, d.data))
           _optionChip(
-            label: o,
+            label: optionLabel(o),
             selected: chosen.contains(o),
             onTap: (lockedRestricted && o == 'Normal')
                 ? () {}
@@ -1578,9 +1653,10 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
   Widget _checkBoxList(ServiceDraft d, ServiceField f, String key) {
     final chosen = d.chosen(f.key);
 
+    final shown = d.spec.optionsFor(f, d.data);
     final custom = [
       for (final c in chosen)
-        if (!f.options.contains(c)) c,
+        if (!shown.contains(c)) c,
     ];
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1596,11 +1672,11 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
               spacing: spacing,
               runSpacing: 2,
               children: [
-                for (final o in f.options)
+                for (final o in shown)
                   SizedBox(
                     width: itemWidth,
                     child: _checkRow(
-                      label: o,
+                      label: optionLabel(o),
                       checked: chosen.contains(o),
                       onTap: () {
                         if (f.key == kVitalsSelectedKey) {
@@ -2101,7 +2177,7 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
     final missing = d.missingOnCurrentSlide();
     if (missing.isNotEmpty) {
       setState(() => _naggedField = '${d.serviceId}/${missing.first}');
-      _toast('Fill in the required box to continue.');
+      _toast('Please correct the red box to continue.');
       return;
     }
     setState(() => _c.nextSlide());
@@ -2117,8 +2193,7 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
       }
     }
     if (_firstAidVitalsMissing()) {
-      _toast('Please take vital signs first. Tap the button.');
-      return false;
+      _toast('Tip: vital signs are not taken yet. You can still continue.');
     }
     final missing =
         d.spec.requiredKeysIn(d.data).where((k) => !_isAnswered(d, k)).toList();
@@ -2131,7 +2206,7 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
       _showAllErrors = true;
       _naggedField = '${d.serviceId}/${missing.first}';
     });
-    _toast('Fill in the required box to continue.');
+    _toast('Please correct the red box to continue.');
     return false;
   }
 
@@ -2156,7 +2231,7 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
     if (empty || d.spec.validate(key, v) != null) return false;
     for (final g in d.spec.fields) {
       if (g.shownWhenKey != key) continue;
-      if (g.isRequiredIn(d.data) && !_isAnswered(d, g.key)) return false;
+      if (g.isSuggestedIn(d.data) && !_isAnswered(d, g.key)) return false;
     }
     return true;
   }
@@ -2304,7 +2379,9 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
     switch (f.kind) {
       case ServiceFieldKind.dropdown:
       case ServiceFieldKind.chips:
-        return f.options.isEmpty ? 'Choose one' : 'e.g. ${f.options.first}';
+        return f.options.isEmpty
+            ? 'Choose one'
+            : 'e.g. ${optionLabel(f.options.first)}';
       case ServiceFieldKind.date:
         return 'Pick a date';
       case ServiceFieldKind.number:
@@ -3472,8 +3549,8 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
                 Expanded(
                   child: Text(
                     bp == null
-                        ? 'Blood pressure reading is missing. Please record the blood pressure before continuing.'
-                        : 'High blood pressure (BP ). Refer for clinician review.',
+                        ? 'Blood pressure is missing. Please record it.'
+                        : 'High blood pressure. Refer to a doctor.',
                     style: const TextStyle(
                       fontSize: 12.5,
                       fontWeight: FontWeight.w700,
@@ -3502,7 +3579,7 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
                 const SizedBox(width: 9),
                 const Expanded(
                   child: Text(
-                    'Please take vital signs first. Tap the button.',
+                    'Take vital signs first.',
                     style: TextStyle(
                       fontSize: 12.5,
                       fontWeight: FontWeight.w700,
@@ -3537,14 +3614,14 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
                   Expanded(
                     child: Text(
                       hasVitals
-                          ? 'Recorded once for this visit on Vital Signs — read-only here.'
+                          ? 'Taken in Vital Signs. Read only here.'
                           : (isPrenatal
-                              ? 'Blood pressure is needed for a prenatal check.'
+                              ? 'Blood pressure is needed.'
                               : (vitalsRequired
-                                  ? 'Vital signs are needed for this incident.'
+                                  ? 'Vital signs are needed.'
                                   : (isFirstAid
-                                      ? 'Optional for this incident — a reading is suggested.'
-                                      : 'No vitals recorded for this visit yet.'))),
+                                      ? 'Optional. A reading is suggested.'
+                                      : 'No vitals yet.'))),
                       style: const TextStyle(
                           fontSize: 11,
                           fontWeight: FontWeight.w600,
@@ -3601,9 +3678,9 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
                 child: Text(
                   hasMeds
                       ? (isFirstAid
-                          ? 'Medication added — stock is deducted on the Medication service.'
-                          : 'Recorded once for this visit on the Medication service — read-only here.')
-                      : 'No medication recorded for this visit yet.',
+                          ? 'Added. Stock is deducted in Medication.'
+                          : 'Recorded in Medication. Read only here.')
+                      : 'No medicine yet.',
                   style: const TextStyle(
                       fontSize: 11,
                       fontWeight: FontWeight.w600,
@@ -3677,8 +3754,8 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
               Expanded(
                 child: Text(
                   added
-                      ? 'Added to this visit — open it from the service list, or here.'
-                      : 'Suggested, not recorded. The choice is yours.',
+                      ? 'Already added. Tap to open.'
+                      : 'Suggested. Optional.',
                   style: const TextStyle(
                       fontSize: 11,
                       fontWeight: FontWeight.w600,

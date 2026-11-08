@@ -122,6 +122,16 @@ class ServiceDraft {
 
   bool dirty = false;
 
+  /// Answers filled in automatically from another service (First Aid into
+  /// Wound Dressing). Key -> the value that was filled. If the nurse changes
+  /// or clears the answer, it no longer matches and is left alone from then on.
+  final Map<String, String> autoFilled = {};
+
+  bool isAutoFilled(String key) {
+    final auto = autoFilled[key];
+    return auto != null && auto == VisitDetailsController.encodeAnswer(data[key]);
+  }
+
   String get label {
     if (serviceId == VisitServiceForms.otherServiceId) {
       return otherName.trim().isEmpty ? 'Other' : otherName.trim();
@@ -162,11 +172,15 @@ class ServiceDraft {
       ? (data[key] as List).map((e) => '$e').toList()
       : const [];
 
+  /// Boxes on this slide that stop the nurse. Only a typed answer that is not
+  /// allowed does that. An empty box never does.
   List<String> get currentSlideRequired {
     final slide = currentSlide;
+    final cross = spec.crossValidate?.call(data).keys.toSet() ?? <String>{};
     return [
-      ...slide.fields.where((f) => f.isRequiredIn(data)).map((f) => f.key),
-      ...?slide.custom?.requiredKeys,
+      for (final f in slide.fields)
+        if (f.isRequiredIn(data) || (cross.contains(f.key) && f.isShownIn(data)))
+          f.key,
     ];
   }
 
@@ -200,7 +214,7 @@ class ServiceDraft {
 
   void refreshStatus() {
     final ownsPrescription =
-        spec.requiredKeysIn(data).contains('medicine_name');
+        spec.suggestedKeysIn(data).contains('medicine_name');
     if (ownsPrescription && medicines.isNotEmpty) {
       status = medicines.every((m) => m.isComplete)
           ? ServiceDraftStatus.completed
@@ -375,6 +389,7 @@ class VisitDetailsController extends ChangeNotifier {
     final draft = _seeded(id, name, staffName);
     _mirrorVitalsInto(draft);
     _drafts.insert(at, draft);
+    _pullSharedInto(draft);
     if (activate) _activeId = id;
     if (notify) notifyListeners();
     return true;
@@ -442,6 +457,7 @@ class VisitDetailsController extends ChangeNotifier {
     }
 
     d.data.clear();
+    d.autoFilled.clear();
     d.medicines.clear();
     d.slide = 0;
     d.dirty = false;
@@ -545,6 +561,8 @@ class VisitDetailsController extends ChangeNotifier {
     final d = draftFor(serviceId);
     if (d == null) return;
     d.set(key, value);
+    _clearStaleOther(d);
+    _shareAcrossServices(d, key);
     _clearHiddenAnswers(d);
     notifyListeners();
   }
@@ -563,18 +581,168 @@ class VisitDetailsController extends ChangeNotifier {
       current.add(option);
       d.set(key, current);
     }
+    _clearStaleOther(d);
+    _shareAcrossServices(d, key);
     _clearHiddenAnswers(d);
     notifyListeners();
   }
 
+  /// Wound Dressing and First Aid share a few details (where on the body,
+  /// how it happened). When BOTH services are in the visit, typing one fills
+  /// the same box in the other, but only if that box is still empty, so
+  /// nothing already typed is overwritten. When only one of them is in the
+  /// visit, that form simply keeps its own boxes.
+  void _shareAcrossServices(ServiceDraft from, String key) {
+    final fromWound = from.serviceId == 'wound_dressing';
+    final fromAid = from.serviceId == 'first_aid_treatment';
+    if (!fromWound && !fromAid) return;
+    final other = draftFor(fromWound ? 'first_aid_treatment' : 'wound_dressing');
+    if (other == null) return;
+    for (final (woundKey, aidKey) in kWoundFirstAidSharedKeys) {
+      final mine = fromWound ? woundKey : aidKey;
+      final theirs = fromWound ? aidKey : woundKey;
+      if (mine != key) continue;
+      final value = from.data[key];
+      if (value == null || '$value'.trim().isEmpty) continue;
+      if ('${other.data[theirs] ?? ''}'.trim().isNotEmpty) continue;
+      other.set(theirs, value);
+    }
+    if (fromAid) _fillWoundFromAid();
+  }
+
+  /// When the second of the two services is added to a visit, bring over
+  /// what was already typed in the first.
+  void _pullSharedInto(ServiceDraft added) {
+    final isWound = added.serviceId == 'wound_dressing';
+    final isAid = added.serviceId == 'first_aid_treatment';
+    if (!isWound && !isAid) return;
+    final other = draftFor(isWound ? 'first_aid_treatment' : 'wound_dressing');
+    if (other == null) return;
+    for (final (woundKey, aidKey) in kWoundFirstAidSharedKeys) {
+      final mine = isWound ? woundKey : aidKey;
+      final theirs = isWound ? aidKey : woundKey;
+      final value = other.data[theirs];
+      if (value == null || '$value'.trim().isEmpty) continue;
+      if ('${added.data[mine] ?? ''}'.trim().isNotEmpty) continue;
+      added.set(mine, value);
+    }
+    if (isWound) _fillWoundFromAid();
+  }
+
+  // ---------------------------------------------------------------------
+  // First Aid -> Wound Dressing
+  //
+  // Only details that mean the SAME thing in both forms are carried over
+  // (when / what kind of wound / what is seen / what happens next). Each
+  // one is marked "auto", can be changed or cleared, and is never filled
+  // again once the nurse has touched it. Not carried over, on purpose:
+  //  - Medicines and vital signs: already recorded ONCE for the visit.
+  //  - Bleeding control, bandaging: First Aid has no wound type, cleaning
+  //    method or dressing material, so there is nothing exact to copy.
+  // ---------------------------------------------------------------------
+
+  static String encodeAnswer(Object? v) {
+    if (v == null) return '';
+    if (v is List) {
+      return v
+          .map((e) => '$e'.trim())
+          .where((e) => e.isNotEmpty)
+          .join('\u0001');
+    }
+    return '$v'.trim();
+  }
+
+  static String _first(Object? v) {
+    if (v is List) return v.isEmpty ? '' : '${v.first}'.trim();
+    return '${v ?? ''}'.trim();
+  }
+
+  void _autoSet(ServiceDraft target, String key, Object? desired) {
+    final want = encodeAnswer(desired);
+    final cur = encodeAnswer(target.data[key]);
+    final last = target.autoFilled[key];
+    if (last == null) {
+      // Never auto-filled: only fill a box nobody has typed in.
+      if (cur.isNotEmpty || want.isEmpty) return;
+    } else if (cur != last) {
+      // The nurse changed or cleared it, so leave it alone.
+      return;
+    }
+    if (want.isEmpty) {
+      target.data.remove(key);
+      target.autoFilled.remove(key);
+      target.dirty = true;
+      return;
+    }
+    target.set(key, desired);
+    target.autoFilled[key] = want;
+  }
+
+  void _fillWoundFromAid() {
+    final aid = draftFor('first_aid_treatment');
+    final wound = draftFor('wound_dressing');
+    if (aid == null || wound == null) return;
+
+    final timing = switch (_first(aid.data['incident_timing'])) {
+      'Just now (under 1 hour)' || 'Within the hour' => 'Just now (under 1 hour)',
+      _ => null,
+    };
+    _autoSet(wound, 'injury_timing', timing);
+
+    _autoSet(wound, 'wound_type',
+        _first(aid.data['incident']) == 'Burn' ? 'Burn' : null);
+
+    final seen = aid.chosen('findings');
+    _autoSet(wound, 'assessment', <String>[
+      if (seen.contains('Redness')) 'Redness present',
+      if (seen.contains('Swelling')) 'Swelling present',
+    ]);
+
+    final next = _first(aid.data['disposition']);
+    _autoSet(wound, 'action_taken', <String>[
+      if (next == 'Returned to Class') 'Returned to class',
+      if (next == 'Sent Home') 'Sent home',
+      if (next == 'Referred to Doctor' || next == 'Referred to Hospital')
+        'Referred to Hospital/RHU',
+      if (_first(aid.data['guardian_informed']) == 'Yes')
+        'Parents / Guardian informed',
+    ]);
+
+    final place = '${aid.data['referred_to_where'] ?? ''}'.trim();
+    final referred =
+        wound.chosen('action_taken').contains('Referred to Hospital/RHU');
+    _autoSet(wound, 'referred_to', referred && place.isNotEmpty ? place : null);
+
+    _clearHiddenAnswers(wound);
+    wound.refreshStatus();
+  }
+
+  /// A typed "Other" answer is dropped when "Other" is no longer picked.
+  void _clearStaleOther(ServiceDraft d) {
+    if (!d.spec.allowOther) return;
+    for (final f in d.spec.fields) {
+      if (!d.spec.offersOther(f)) continue;
+      final v = d.data[f.key];
+      final picked = v is List
+          ? v.any((e) => '$e' == kOtherLabel)
+          : '${v ?? ''}' == kOtherLabel;
+      if (!picked) d.data.remove(f.otherFieldKey);
+    }
+  }
+
   void _clearHiddenAnswers(ServiceDraft d) {
+    // A box that is no longer shown must not keep an old answer (for example
+    // a tetanus answer after the wound type was changed to a clean scrape).
+    // Vital Signs and BMI manage their own boxes and are left alone.
     if (d.serviceId == 'first_aid_treatment' ||
-        d.serviceId == 'medicine_consultation') {
+        d.serviceId == 'medicine_consultation' ||
+        d.serviceId == 'wound_dressing' ||
+        d.serviceId == 'health_counselling') {
       var removedAny = false;
       for (final f in d.spec.fields) {
         if (f.isShownIn(d.data)) continue;
         if (d.data.remove(f.key) == null) continue;
-        d.data.remove('${f.key}_other');
+        d.data.remove(f.otherFieldKey);
         removedAny = true;
       }
       if (removedAny) d.refreshStatus();
