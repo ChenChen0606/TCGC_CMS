@@ -118,9 +118,7 @@ void dispose() {
 
     if (email == null || email.isEmpty) {
       if (!mounted) return;
-      setState(() => _error =
-          'DEBUG: no email found for username "$username" '
-          '(lookup failed, not the password).');
+      setState(() => _error = 'Incorrect username or password.');
       return;
     }
 
@@ -206,32 +204,49 @@ void dispose() {
         ),
       ),
     );
-  } on AuthException catch (e) {
-    debugPrint('AUTH ERROR: status=${e.statusCode} message=${e.message}');
-    if (!mounted) return;
-    final message = e.message.toLowerCase();
-    if (message.contains('not confirmed') ||
-        message.contains('email_not_confirmed')) {
-      setState(() => _error =
-          'This account has not been activated yet. Please contact the '
-              'Clinic Head.');
-    } else {
-      // TEMP DEBUG: shows the real reason. Change back later.
-      setState(() => _error = 'DEBUG Auth: ${e.message} (${e.statusCode})');
+    } on AuthException catch (e) {
+      debugPrint('AUTH ERROR: status=${e.statusCode} message=${e.message}');
+      if (!mounted) return;
+      final message = e.message.toLowerCase();
+
+      String text;
+      if (message.contains('not confirmed') ||
+          message.contains('email_not_confirmed')) {
+        text = 'This account has not been activated yet. '
+            'Please contact the Clinic Head.';
+      } else if (message.contains('invalid login') ||
+          message.contains('invalid credentials') ||
+          e.statusCode == '400') {
+        text = 'Incorrect username or password.';
+      } else if (message.contains('rate limit') ||
+          message.contains('too many') ||
+          e.statusCode == '429') {
+        text = 'Too many attempts. Please wait a moment and try again.';
+      } else {
+        text = 'Unable to sign in. Please try again.';
+      }
+      setState(() => _error = text);
+    } catch (err) {
+      debugPrint('LOGIN ERROR: $err');
+      if (!mounted) return;
+      final text = '$err'.toLowerCase();
+
+      String msg;
+      if (text.contains('account_deactivated')) {
+        msg = 'Your account has been deactivated. Please contact the Clinic Head.';
+      } else if (text.contains('socket') ||
+          text.contains('network') ||
+          text.contains('failed host lookup') ||
+          text.contains('clientexception') ||
+          text.contains('timeout')) {
+        msg = 'No connection. Please check your internet and try again.';
+      } else {
+        msg = 'Something went wrong. Please try again.';
+      }
+      setState(() => _error = msg);
+    } finally {
+      if (mounted) setState(() => _submitting = false);
     }
-  } catch (err) {
-    debugPrint('LOGIN ERROR: $err');
-    if (!mounted) return;
-    if ('$err'.contains('ACCOUNT_DEACTIVATED')) {
-      setState(() => _error =
-          'Your account has been deactivated. Please contact the Clinic Head.');
-    } else {
-      // TEMP DEBUG: shows the real reason. Change back later.
-      setState(() => _error = 'DEBUG Error: $err');
-    }
-  } finally {
-    if (mounted) setState(() => _submitting = false);
-  }
 }
 
   bool _metaIsActive(User user) {
