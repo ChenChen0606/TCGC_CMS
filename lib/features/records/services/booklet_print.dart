@@ -45,21 +45,92 @@ class _Ctx {
   final String label;
 }
 
+/// One service in the "SERVICE & FINDING" column: a bold service name and
+/// labeled detail rows underneath (Height: 160 cm, Weight: 55 kg, ...).
 class _Line {
-  const _Line(this.code, this.label, this.findings, this.action, {this.flat});
+  const _Line(this.code, this.label, this.rows);
   final String code;
   final String label;
-  final String findings;
-  final String action;
-
-  final String? flat;
-
-  String get stacked =>
-      flat ??
-      (action.isEmpty
-          ? findings
-          : (findings.isEmpty ? action : '$findings | $action'));
+  final List<(String, String)> rows;
 }
+
+List<(String, String)> _rows(List<(String, String)> r) => [
+      for (final e in r)
+        if (e.$2.trim().isNotEmpty) (e.$1, e.$2.trim()),
+    ];
+/// Short labels used in the SERVICE & FINDING column.
+const Map<String, String> _abbr = {
+  // vitals
+  'BP': 'BP',
+  'Pulse rate': 'PR',
+  'Temperature': 'T',
+  'Respiratory rate': 'RR',
+  'SpO2': 'SpO2',
+  'Position / Arm': 'Pos/Arm',
+  'Action taken': 'Act',
+  'Referred to': 'Ref',
+  'Referral reason': 'Ref Rsn',
+  // bmi
+  'Height': 'H',
+  'Weight': 'W',
+  'BMI': 'BMI',
+  'Notes': 'Note',
+  'Note': 'Note',
+  // wound / first aid
+  'When': 'When',
+  'How': 'How',
+  'Location': 'Loc',
+  'Wound type': 'Type',
+  'Burn degree': 'Burn',
+  'Condition': 'Cond',
+  'Bleeding': 'Bleed',
+  'Tetanus shot': 'TT',
+  'Findings': 'Fnd',
+  'Cleaned with': 'Clean',
+  'Dressing': 'Dsg',
+  'Medicine': 'Med',
+  'Next dressing': 'Next Dsg',
+  'Incident': 'Inc',
+  'Where': 'Where',
+  'Body part': 'Part',
+  'Pain level': 'Pain',
+  'Head injury signs': 'Head Inj',
+  'Consciousness': 'LOC',
+  'First aid given': 'FA',
+  'Minutes rested': 'Rest',
+  'Condition after': 'Cond After',
+  'Disposition': 'Dispo',
+  'Sent home with': 'Sent',
+  'Follow-up': 'F/U',
+  // medication / consultation
+  'Reason': 'Rsn',
+  'Chief complaint': 'CC',
+  'Complaint category': 'Cat',
+  'Duration': 'Dur',
+  'Danger signs': 'DS',
+  'Impression': 'Imp',
+  'Treatment': 'Tx',
+  // counselling / prenatal / cert
+  'Session': 'Sess',
+  'AOG': 'AOG',
+  'FHT': 'FHT',
+  'Fetal movement': 'FM',
+  'Edema': 'Edema',
+  'Urine protein': 'U-Prot',
+  'Service': 'Svc',
+  'Given this visit': 'Given',
+  'Action': 'Act',
+  'Excused for': 'Excused',
+  'Days': 'Days',
+  'Issued': 'Issued',
+};
+
+String _short(String label) => _abbr[label] ?? label;
+
+/// Detail items for one service, e.g. ["H: 147 cm", "W: 43 kg", ...].
+List<String> _items(_Line l) => [
+      for (final r in l.rows) '${_short(r.$1)}: ${r.$2}',
+    ];
 
 String _txt(Object? raw, [String sep = ', ']) {
   if (raw == null) return '';
@@ -76,6 +147,22 @@ String _first(ServiceDraft d, List<String> keys, [String sep = ', ']) {
   }
   return '';
 }
+
+/// Value of a field, with the word "Other" replaced by what was typed.
+String _v(ServiceDraft d, String key, [String sep = ', ']) {
+  final other = _txt(d.data['${key}_other']);
+  final raw = d.data[key];
+  final items = raw is Iterable ? raw.map((e) => '$e'.trim()) : [_txt(raw)];
+  return items
+      .where((e) => e.isNotEmpty)
+      .map((e) => (e == 'Other' && other.isNotEmpty) ? other : e)
+      .join(sep);
+}
+
+/// Adds a unit unless the value already carries one.
+String _u(String v, String unit) => v.isEmpty
+    ? ''
+    : (RegExp(r'[a-zA-Z%°]').hasMatch(v) ? v : '$v $unit');
 
 String _num(Object? n) {
   if (n == null) return '';
@@ -146,13 +233,6 @@ String _aog(_Ctx x) {
   return '${days ~/ 7}w ${days % 7}d';
 }
 
-String _woundSize(ServiceDraft d) {
-  final l = _first(d, ['wound_length_cm']);
-  final w = _first(d, ['wound_width_cm']);
-  if (l.isEmpty && w.isEmpty) return '';
-  return w.isEmpty ? l : '$l×$w';
-}
-
 String _codeFromLabel(String label) {
   final l = label.toLowerCase();
   if (l.contains('certificate')) return 'CERT';
@@ -168,279 +248,152 @@ String _codeFromLabel(String label) {
   return t.length <= 3 ? t.toUpperCase() : t.substring(0, 3).toUpperCase();
 }
 
-class _Spec {
-  const _Spec(this.headers, this.flex, this.cells);
-  final List<String> headers;
-  final List<double> flex;
-  final List<String> Function(_Ctx x) cells;
-}
-
-String _lines(Iterable<String> parts) => parts.join('\n');
-
-final Map<String, _Spec> _specs = {
-  'vital_signs': _Spec(
-    ['BP', 'PR', 'RR', 'TEMP', 'SpO2', 'ACTION TAKEN'],
-    [1, .8, .8, .9, .8, 3.2],
-    (x) => [
-      _bp(x.c),
-      _pr(x),
-      _rr(x),
-      _temp(x),
-      _spo2(x),
-      _first(x.d, ['action_taken'], '; '),
-    ],
-  ),
-  'bpi': _Spec(
-    ['HT (cm)', 'WT (kg)', 'BMI', 'BMI INDICATOR'],
-    [1, 1, 1, 2],
-    (x) => [_height(x), _weight(x), _bmi(x), _bmiClass(x)],
-  ),
-  'wound_dressing': _Spec(
-    ['SITE', 'TYPE', 'CLEANED WITH', 'MEDICINE', 'DRESSING'],
-    [1.3, 1.2, 1.8, 1.8, 1.8],
-    (x) => [
-      _first(x.d, ['wound_location']),
-      _first(x.d, ['wound_type']),
-      _first(x.d, ['cleaning_performed']),
-      _first(x.d, ['medication_applied']),
-      _first(x.d, ['dressing_applied']),
-    ],
-  ),
-  'first_aid_treatment': _Spec(
-    ['INCIDENT', 'BODY PART', 'TREATMENT GIVEN', 'CONDITION AFTER'],
-    [1.5, 1.3, 3, 1.5],
-    (x) => [
-      _first(x.d, ['incident']),
-      _first(x.d, ['body_part', 'affected_area', 'injury_site', 'site']),
-      _first(
-          x.d,
-          ['treatment_given', 'first_aid_given', 'treatment', 'action_taken'],
-          '; '),
-      _first(x.d, ['condition_after', 'patient_condition', 'outcome']),
-    ],
-  ),
-  'health_counselling': _Spec(
-    ['SESSION', 'SESSION TYPE', 'DURATION', 'FOLLOW-UP DATE'],
-    [1.2, 1.6, 1.2, 1.6],
-    (x) => [
-      'Session held',
-      _first(x.d, ['session_type', 'counselling_type', 'counsellor_type']),
-      _first(x.d, ['duration', 'duration_min', 'session_duration']),
-      _pretty(_first(x.d, ['follow_up_date'])),
-    ],
-  ),
-  'prenatal': _Spec(
-    ['AOG', 'BP', 'FHT', 'EDEMA', 'GIVEN THIS VISIT', 'ACTION / FOLLOW-UP'],
-    [.9, .9, .8, .9, 2, 2.4],
-    (x) => [
-      _aog(x),
-      _bp(x.c),
-      _first(x.d, ['fht', 'fetal_heart_tone', 'fetal_heart_rate']),
-      _first(x.d, ['edema']),
-      _first(
-          x.d, ['given_this_visit', 'supplements_given', 'medications_given']),
-      _first(x.d, ['follow_up', 'follow_up_instructions', 'next_visit_date'],
-          '; '),
-    ],
-  ),
-  'medication': _Spec(
-    ['MEDICINE', 'QTY', 'FREQUENCY'],
-    [3, .8, 2],
-    (x) => [
-      _lines(x.d.medicines.map((m) => m.name)),
-      _lines(x.d.medicines.map((m) => _num(m.quantity))),
-      _lines(x.d.medicines.map((m) => '${m.frequency}')),
-    ],
-  ),
-  'medicine_consultation': _Spec(
-    [
-      'REASON',
-      'IMPRESSION',
-      'TREATMENT',
-      'MEDICATION',
-      'FOLLOW-UP / DISPOSITION'
-    ],
-    [1.8, 1.8, 1.6, 1.8, 1.8],
-    (x) => [
-      _first(x.d, ['REASON']),
-      _first(x.d, ['clinical_impression']),
-      _first(x.d, ['treatment'], '; '),
-      _first(x.d, ['medication_summary']),
-      _first(x.d, ['follow_up_instructions', 'disposition']),
-    ],
-  ),
-  'medicine_certificate': _Spec(
-    ['EXCUSED FOR', 'DAYS', 'ISSUED ON'],
-    [3, .8, 1.5],
-    (x) => [
-      _first(x.d, ['excused_for']),
-      _first(x.d, ['days', 'excused_days', 'number_of_days']),
-      _pretty(_first(x.d, ['cert_issued_on'])),
-    ],
-  ),
-};
-
-_Spec? _specFor(String id) => _specs[id == 'bp_tracking' ? 'vital_signs' : id];
-
 List<_Line> _linesFor(_Ctx x, bool impression) {
   final d = x.d;
   final code = kServiceCodes[d.serviceId] ?? _codeFromLabel(d.label);
+  List<_Line> one(List<(String, String)> r) => [_Line(code, x.label, _rows(r))];
+
   switch (d.serviceId) {
     case 'vital_signs':
     case 'bp_tracking':
-      final bp = _bp(x.c),
-          pr = _pr(x),
-          t = _temp(x),
-          rr = _rr(x),
-          sp = _spo2(x);
-      return [
-        _Line(
-          code,
-          x.label,
-          [
-            if (bp.isNotEmpty)
-              '$bp${_bpClass(x).isEmpty ? '' : ' (${_bpClass(x)})'}',
-            if (pr.isNotEmpty) 'PR $pr',
-            if (t.isNotEmpty) 'T $t',
-            if (rr.isNotEmpty) 'RR $rr',
-            if (sp.isNotEmpty) 'SpO2 $sp',
-          ].join(' · '),
-          _first(d, ['action_taken'], '; '),
+      final bp = _bp(x.c);
+      final cls = _bpClass(x);
+      final temp = _temp(x);
+      final method = _v(d, 'method');
+      return one([
+        (
+          'BP',
+          bp.isEmpty ? '' : '${_u(bp, 'mmHg')}${cls.isEmpty ? '' : ' ($cls)'}'
         ),
-      ];
+        ('Pulse rate', _u(_pr(x), 'bpm')),
+        (
+          'Temperature',
+          '${_u(temp, '°C')}${temp.isEmpty || method.isEmpty ? '' : ' ($method)'}'
+        ),
+        ('Respiratory rate', _u(_rr(x), '/min')),
+        ('SpO2', _u(_spo2(x), '%')),
+        (
+          'Position / Arm',
+          [_v(d, 'position'), _v(d, 'arm_used')]
+              .where((e) => e.isNotEmpty)
+              .join(' / ')
+        ),
+        ('Action taken', _v(d, 'action_taken', '; ')),
+        ('Referred to', _v(d, 'referred_to')),
+        ('Referral reason', _v(d, 'referral_reason')),
+      ]);
     case 'bpi':
-      final h = _height(x), w = _weight(x), b = _bmi(x), k = _bmiClass(x);
-      return [
-        _Line(
-          code,
-          x.label,
-          [
-            if (h.isNotEmpty) 'Height $h cm',
-            if (w.isNotEmpty) 'Weight $w kg',
-            if (b.isNotEmpty) 'BMI $b${k.isEmpty ? '' : ' ($k)'}',
-          ].join(' · '),
-          '',
-        ),
-      ];
+      final k = _bmiClass(x);
+      final b = _bmi(x);
+      return one([
+        ('Height', _u(_height(x), 'cm')),
+        ('Weight', _u(_weight(x), 'kg')),
+        ('BMI', b.isEmpty ? '' : '$b${k.isEmpty ? '' : ' ($k)'}'),
+        ('Notes', _v(d, 'notes')),
+      ]);
     case 'wound_dressing':
-      final what = [
-        _first(d, ['wound_location']),
-        _first(d, ['wound_type']),
-        _woundSize(d),
-      ].where((e) => e.isNotEmpty).join(' ');
-      final act = [
-        _first(d, ['cleaning_performed']),
-        _first(d, ['medication_applied']),
-        _first(d, ['dressing_applied']),
-      ].where((e) => e.isNotEmpty).join(', ');
-      return [_Line(code, x.label, what, act)];
+      return one([
+        ('When', _v(d, 'injury_timing')),
+        ('How', _v(d, 'injury_cause')),
+        ('Location', _v(d, 'wound_location')),
+        ('Wound type', _v(d, 'wound_type')),
+        ('Burn degree', _v(d, 'burn_degree')),
+        ('Condition', _v(d, 'wound_condition')),
+        ('Bleeding', _v(d, 'bleeding')),
+        ('Tetanus shot', _v(d, 'tetanus_status')),
+        ('Findings', _v(d, 'assessment')),
+        ('Cleaned with', _v(d, 'cleaning_performed')),
+        ('Dressing', _v(d, 'dressing_applied')),
+        ('Medicine', d.medicines.map((m) => m.name).join(', ')),
+        ('Action taken', _v(d, 'action_taken', '; ')),
+        ('Referred to', _v(d, 'referred_to')),
+        ('Next dressing', _pretty(_first(d, ['next_dressing_date']))),
+        ('Notes', _v(d, 'notes')),
+      ]);
     case 'first_aid_treatment':
-      final what = [
-        _first(d, ['incident']),
-        _first(d, ['body_part', 'affected_area', 'injury_site', 'site']),
-      ].where((e) => e.isNotEmpty).join(', ');
-      final tx = _first(
-          d,
-          ['treatment_given', 'first_aid_given', 'treatment', 'action_taken'],
-          '; ');
-      final after =
-          _first(d, ['condition_after', 'patient_condition', 'outcome']);
-      return [
-        _Line(
-            code,
-            x.label,
-            what,
-            [tx, if (after.isNotEmpty) '> $after']
-                .where((e) => e.isNotEmpty)
-                .join(' ')),
-      ];
+      return one([
+        ('Incident', _v(d, 'incident')),
+        ('When', _v(d, 'incident_timing')),
+        ('Where', _v(d, 'incident_place')),
+        ('How', _v(d, 'incident_cause')),
+        ('Body part', _v(d, 'body_part')),
+        ('Findings', _v(d, 'findings')),
+        ('Pain level', _u(_v(d, 'pain_level'), '/10')),
+        ('Head injury signs', _v(d, 'head_injury_signs')),
+        ('Consciousness', _v(d, 'consciousness')),
+        ('First aid given', _v(d, 'treatment', '; ')),
+        ('Medicine', _v(d, 'medication_given')),
+        ('Minutes rested', _v(d, 'observation_minutes')),
+        ('Condition after', _v(d, 'condition_after')),
+        ('Disposition', _v(d, 'disposition')),
+        ('Referred to', _v(d, 'referred_to_where')),
+        ('Sent home with', _v(d, 'sent_to')),
+        ('Follow-up', _pretty(_first(d, ['follow_up_date']))),
+        ('Notes', _v(d, 'notes')),
+      ]);
     case 'medication':
-      if (d.medicines.isEmpty) return [_Line(code, x.label, '', '')];
-      final why = _first(d, ['reason']);
-      return [
+      final why = _v(d, 'reason_common');
+      return one([
+        ('Reason', why),
         for (final m in d.medicines)
-          _Line(
-            code,
-            x.label,
-            why.isEmpty ? '' : 'Reason: $why',
-            '${m.name}${_num(m.quantity).isEmpty ? '' : ' x${_num(m.quantity)}'}'
-            '${'${m.frequency}'.trim().isEmpty ? '' : ', ${m.frequency}'}'
-            '${'${m.action}'.trim().isEmpty ? '' : ' (${m.action})'}',
-            flat:
-                '${m.name}${_num(m.quantity).isEmpty ? '' : ' x${_num(m.quantity)}'}'
-                '${'${m.frequency}'.trim().isEmpty ? '' : ' ${m.frequency}'}'
-                '${'${m.action}'.trim().isEmpty ? '' : ' (${m.action})'}',
+          (
+            m.name,
+            [
+              if (_num(m.quantity).isNotEmpty) 'Qty ${_num(m.quantity)}',
+              if (m.frequency.trim().isNotEmpty) m.frequency.trim(),
+              if (m.action.trim().isNotEmpty) '(${m.action.trim()})',
+            ].join(', ')
           ),
-      ];
+      ]);
     case 'medicine_consultation':
-      final cc = _first(d, ['REASON']);
-      final imp = _first(d, ['clinical_impression']);
-      final tx = [
-        _first(d, ['treatment'], '; '),
-        _first(d, ['medication_summary']),
-      ].where((e) => e.isNotEmpty).join('; ');
-      final findings = [
-        cc,
-        if (impression && imp.isNotEmpty) 'Imp: $imp',
-      ].where((e) => e.isNotEmpty).join(' · ');
-      return [_Line(code, x.label, findings, tx)];
+      return one([
+        ('Chief complaint', _v(d, 'chief_complaint')),
+        ('Complaint category', _v(d, 'symptoms')),
+        (
+          'Duration',
+          [_v(d, 'duration_onset_choice'), _v(d, 'duration_onset')]
+              .where((e) => e.isNotEmpty)
+              .join(', ')
+        ),
+        ('Danger signs', _v(d, 'red_flags')),
+        if (impression) ('Impression', _v(d, 'clinical_impression')),
+        ('Treatment', _v(d, 'treatment', '; ')),
+        ('Disposition', _v(d, 'disposition')),
+        ('Referred to', _v(d, 'referred_to')),
+        ('Follow-up', _pretty(_first(d, ['follow_up_date']))),
+      ]);
     case 'health_counselling':
-      final type =
-          _first(d, ['session_type', 'counselling_type', 'counsellor_type']);
-      final dur = _first(d, ['duration', 'duration_min', 'session_duration']);
-      final fu = _pretty(_first(d, ['follow_up_date']), 'MMM d');
-      final fuLong = _pretty(_first(d, ['follow_up_date']));
-      return [
-        _Line(
-          code,
-          x.label,
-          [
-            'Session held',
-            if (dur.isNotEmpty)
-              dur.contains(RegExp(r'[a-zA-Z]')) ? dur : '$dur min'
-          ].join(' · '),
-          fuLong.isEmpty ? '[restricted]' : 'Follow-up $fuLong   [restricted]',
-          flat: [
-                if (type.isNotEmpty) type else 'Session held',
-                if (dur.isNotEmpty)
-                  dur.contains(RegExp(r'[a-zA-Z]')) ? dur : '$dur min',
-                if (fu.isNotEmpty) 'f/u $fu',
-              ].join(' · ') +
-              ' (restricted)',
-        ),
-      ];
+      // Restricted: the booklet stays minimal on purpose.
+      final type = _v(d, 'session_type');
+      return one([
+        ('Session', type.isEmpty ? 'Session held' : type),
+        ('Duration', _u(_first(d, ['duration_minutes', 'duration']), 'min')),
+        ('Follow-up', _pretty(_first(d, ['follow_up_date']))),
+        ('Note', 'Restricted'),
+      ]);
     case 'prenatal':
-      final f = [
-        if (_aog(x).isNotEmpty) _aog(x),
-        if (_bp(x.c).isNotEmpty) _bp(x.c),
-        if (_first(d, ['fht', 'fetal_heart_tone', 'fetal_heart_rate'])
-            .isNotEmpty)
-          'FHT ${_first(d, ['fht', 'fetal_heart_tone', 'fetal_heart_rate'])}',
-        if (_first(d, ['edema']).isNotEmpty) 'edema ${_first(d, ['edema'])}',
-      ].join(' · ');
-      final a = [
-        _first(
-            d, ['given_this_visit', 'supplements_given', 'medications_given']),
-        _first(d, ['follow_up', 'follow_up_instructions', 'next_visit_date'],
-            '; '),
-      ].where((e) => e.isNotEmpty).join('; ');
-      return [_Line(code, x.label, f, a)];
+      return one([
+        ('AOG', _aog(x)),
+        ('BP', _u(_bp(x.c), 'mmHg')),
+        ('FHT', _u(_first(d, ['fetal_heart_tone']), 'bpm')),
+        ('Fetal movement', _v(d, 'fetal_movement')),
+        ('Edema', _v(d, 'edema')),
+        ('Urine protein', _v(d, 'urine_protein')),
+        ('Danger signs', _v(d, 'danger_signs')),
+        ('Service', _v(d, 'service_provided', '; ')),
+        ('Given this visit', _v(d, 'given_this_visit')),
+        ('Action', _v(d, 'action_taken', '; ')),
+        ('Referred to', _v(d, 'referred_to')),
+        ('Follow-up', _pretty(_first(d, ['follow_up_date']))),
+      ]);
     case 'medicine_certificate':
-      final days = _first(d, ['days', 'excused_days', 'number_of_days']);
-      final on = _pretty(_first(d, ['cert_issued_on']), 'MMM d');
-      return [
-        _Line(
-          code,
-          x.label,
-          [
-            'Excused: ${_first(d, ['excused_for'])}',
-            if (days.isNotEmpty) '$days d',
-          ].join(' · '),
-          on.isEmpty ? '' : 'Issued $on',
-        ),
-      ];
+      return one([
+        ('Excused for', _first(d, ['excused_for'])),
+        ('Days', _first(d, ['days', 'excused_days', 'number_of_days'])),
+        ('Issued', _pretty(_first(d, ['cert_issued_on']))),
+      ]);
     default:
-      return [_Line(code, x.label, '', '')];
+      return one(const []);
   }
 }
 
@@ -550,7 +503,7 @@ _V _visit(
       }
       final c = _codeFromLabel(label);
       codes.add(c);
-      lines.add(_Line(c, label, '', ''));
+      lines.add(_Line(c, label, const []));
     }
   }
 
@@ -652,18 +605,14 @@ pw.Widget _cell(String t,
   );
 }
 
+/// Name only. The ID number is intentionally not printed.
 pw.Widget _nameCell(_V v) => pw.Padding(
       padding: const pw.EdgeInsets.all(4),
-      child: pw.Column(
-        crossAxisAlignment: pw.CrossAxisAlignment.start,
-        children: [
-          pw.Text(v.name,
-              style: pw.TextStyle(fontSize: 9, fontWeight: pw.FontWeight.bold)),
-          pw.Text(v.id, style: const pw.TextStyle(fontSize: 7.5)),
-        ],
-      ),
+      child: pw.Text(v.name,
+          style: pw.TextStyle(fontSize: 9, fontWeight: pw.FontWeight.bold)),
     );
 
+/// The single "SERVICE & FINDING" cell.
 pw.Widget _linesCell(List<_Line> ls) {
   if (ls.isEmpty) return _cell('—');
   return pw.Padding(
@@ -673,16 +622,28 @@ pw.Widget _linesCell(List<_Line> ls) {
       children: [
         for (final l in ls)
           pw.Padding(
-            padding: const pw.EdgeInsets.only(bottom: 3),
+            padding: const pw.EdgeInsets.only(bottom: 4),
             child: pw.Column(
               crossAxisAlignment: pw.CrossAxisAlignment.start,
               children: [
+                // Service name on its own line
                 pw.Text(l.label,
                     style: pw.TextStyle(
                         fontSize: 8.5, fontWeight: pw.FontWeight.bold)),
-                if (l.stacked.isNotEmpty)
-                  pw.Text(l.stacked,
-                      style: const pw.TextStyle(fontSize: 8.5)),
+                // Details in one flowing line: A | B | C
+                if (_items(l).isNotEmpty)
+                  pw.RichText(
+                    text: pw.TextSpan(
+                      style: const pw.TextStyle(fontSize: 8.5),
+                      children: [
+                        for (final (i, t) in _items(l).indexed) ...[
+                          pw.TextSpan(text: t),
+                          if (i < _items(l).length - 1)
+                            const pw.TextSpan(text: '  |  '),
+                        ],
+                      ],
+                    ),
+                  ),
               ],
             ),
           ),
@@ -718,32 +679,6 @@ pw.Widget _table(
 // ---------------------------------------------------------------------------
 
 const List<double> _indFlex = [.4, 1.2, .8, .8, 1.8, 5.7];
-const List<double> _svcFlex = [1, 2, 2];
-
-pw.Widget _svcTable(List<List<String>> rows,
-    {bool header = false, double minHeight = 0}) {
-  return pw.Table(
-    columnWidths: {
-      for (var i = 0; i < 3; i++) i: pw.FlexColumnWidth(_svcFlex[i]),
-    },
-    border: pw.TableBorder(
-      verticalInside: const pw.BorderSide(color: PdfColors.black, width: 0.6),
-      horizontalInside: header
-          ? pw.BorderSide.none
-          : const pw.BorderSide(color: PdfColors.grey500, width: 0.4),
-    ),
-    children: [
-      for (final r in rows)
-        pw.TableRow(children: [
-          for (final t in r)
-            pw.Container(
-              height: minHeight > 0 ? minHeight : null,
-              child: _cell(t, bold: header, center: header, size: 8.5),
-            ),
-        ]),
-    ],
-  );
-}
 
 pw.Widget _individualTable(List<_V> vs, bool blankRows) {
   const heads = [
@@ -752,75 +687,23 @@ pw.Widget _individualTable(List<_V> vs, bool blankRows) {
     'TIME IN',
     'TIME OUT',
     'REASON/COMPLAINT',
-    null,
+    'SERVICE & FINDING',
   ];
-
-  final rows = <pw.TableRow>[
-    pw.TableRow(
-      repeat: true,
-      decoration: const pw.BoxDecoration(color: _headFill),
-      verticalAlignment: pw.TableCellVerticalAlignment.full,
-      children: [
-        for (final h in heads)
-          h == null
-              ? _svcTable([
-                  ['SERVICE', 'FINDINGS', 'TREATMENT / ACTION']
-                ], header: true)
-              : _cell(h, bold: true, center: true, size: 8.5),
-      ],
-    ),
-  ];
-
-  for (var i = 0; i < vs.length; i++) {
-    final v = vs[i];
-    rows.add(pw.TableRow(
-      verticalAlignment: pw.TableCellVerticalAlignment.full,
-      children: [
+  final rows = <List<pw.Widget>>[
+    for (var i = 0; i < vs.length; i++)
+      [
         _cell('${i + 1}', center: true),
-        _cell(_pretty(v.date), center: true),
-        _cell(v.tin, center: true),
-        _cell(v.tout, center: true),
-        _cell(v.complaint.isEmpty ? '-' : v.complaint),
-        _svcTable(v.lines.isEmpty
-            ? [
-                ['-', '-', '-']
-              ]
-            : [
-                for (final l in v.lines)
-                  [
-                    l.label,
-                    l.findings.isEmpty ? '-' : l.findings,
-                    l.action.isEmpty ? '-' : l.action,
-                  ]
-              ]),
+        _cell(_pretty(vs[i].date), center: true),
+        _cell(vs[i].tin, center: true),
+        _cell(vs[i].tout, center: true),
+        _cell(vs[i].complaint.isEmpty ? '-' : vs[i].complaint),
+        _linesCell(vs[i].lines),
       ],
-    ));
-  }
-
-  if (blankRows) {
-    for (var i = 0; i < 6; i++) {
-      rows.add(pw.TableRow(
-        verticalAlignment: pw.TableCellVerticalAlignment.full,
-        children: [
-          for (var c = 0; c < 6; c++)
-            c == 5
-                ? _svcTable([
-                    ['', '', '']
-                  ], minHeight: 24)
-                : pw.SizedBox(height: 24),
-        ],
-      ));
-    }
-  }
-
-  return pw.Table(
-    border: pw.TableBorder.all(color: PdfColors.black, width: 0.6),
-    columnWidths: {
-      for (var i = 0; i < _indFlex.length; i++)
-        i: pw.FlexColumnWidth(_indFlex[i]),
-    },
-    children: rows,
-  );
+    if (blankRows)
+      for (var i = 0; i < 6; i++)
+        [for (var c = 0; c < 6; c++) pw.SizedBox(height: 24)],
+  ];
+  return _table(heads, _indFlex, rows);
 }
 
 pw.Widget _signatures({required bool withRoles}) {
@@ -865,19 +748,6 @@ pw.Widget _signatures({required bool withRoles}) {
   );
 }
 
-pw.Widget _totalBox(String text) => pw.Align(
-      alignment: pw.Alignment.centerLeft,
-      child: pw.Container(
-        margin: const pw.EdgeInsets.only(top: 4),
-        padding: const pw.EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-        decoration: pw.BoxDecoration(
-          border: pw.Border.all(color: PdfColors.black, width: 0.8),
-        ),
-        child: pw.Text(text,
-            style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold)),
-      ),
-    );
-
 // ---------------------------------------------------------------------------
 // HTML helpers (used by BookletPrint.buildHtml)
 // ---------------------------------------------------------------------------
@@ -889,15 +759,26 @@ String _hTd(String t, {bool center = false, bool bold = false}) =>
 
 String _hRaw(String inner, [String cls = '']) => '<td class="$cls">$inner</td>';
 
-String _hName(_V v) =>
-    _hRaw('<b>${_e(v.name)}</b><div class="sm">${_e(v.id)}</div>');
+/// Name only. The ID number is intentionally not printed.
+String _hName(_V v) => _hRaw('<b>${_e(v.name)}</b>');
 
+/// The single "SERVICE & FINDING" cell.
 String _hLines(List<_Line> ls) {
   if (ls.isEmpty) return _hTd('—');
   final b = StringBuffer();
   for (final l in ls) {
-    b.write('<div class="ln"><b>${_e(l.label)}</b>');
-    if (l.stacked.isNotEmpty) b.write('<div>${_e(l.stacked)}</div>');
+    b.write('<div style="margin-bottom:4px"><b>${_e(l.label)}</b>');
+    final items = _items(l);
+    if (items.isNotEmpty) {
+      // Short items stay together; long ones (e.g. Action) may wrap.
+      final parts = [
+        for (final t in items)
+          t.length <= 24
+              ? '<span style="white-space:nowrap">${_e(t)}</span>'
+              : _e(t),
+      ];
+      b.write('<div>${parts.join(' &nbsp;|&nbsp; ')}</div>');
+    }
     b.write('</div>');
   }
   return _hRaw(b.toString());
@@ -919,50 +800,33 @@ String _hTable(
       '<thead><tr>$head</tr></thead><tbody>$body</tbody></table>';
 }
 
-String _hSub(List<List<String>> rows) =>
-    '<table class="sub">${_hCols(_svcFlex)}${rows.map((r) => '<tr>${r.map((t) => '<td>${_e(t)}</td>').join()}</tr>').join()}</table>';
-
 String _hIndividual(List<_V> vs, bool blankRows) {
-  const heads = ['NO', 'DATE', 'TIME IN', 'TIME OUT', 'REASON/COMPLAINT'];
-  final head = StringBuffer();
-  for (final h in heads) {
-    head.write('<th>${_e(h)}</th>');
-  }
-  head.write('<th class="nopad"><table class="sub">${_hCols(_svcFlex)}'
-      '<tr><th>SERVICE</th><th>FINDINGS</th><th>TREATMENT / ACTION</th></tr>'
-      '</table></th>');
-
-  final body = StringBuffer();
-  for (var i = 0; i < vs.length; i++) {
-    final v = vs[i];
-    final sub = v.lines.isEmpty
-        ? [
-            ['-', '-', '-']
-          ]
-        : [
-            for (final l in v.lines)
-              [
-                l.label,
-                l.findings.isEmpty ? '-' : l.findings,
-                l.action.isEmpty ? '-' : l.action,
-              ]
-          ];
-    body.write('<tr>${_hTd('${i + 1}', center: true)}'
-        '${_hTd(_pretty(v.date), center: true)}'
-        '${_hTd(v.tin, center: true)}${_hTd(v.tout, center: true)}'
-        '${_hTd(v.complaint.isEmpty ? '-' : v.complaint)}'
-        '<td class="nopad">${_hSub(sub)}</td></tr>');
-  }
-  if (blankRows) {
-    for (var i = 0; i < 6; i++) {
-      body.write(
-          '<tr class="blank"><td></td><td></td><td></td><td></td><td></td>'
-          '<td class="nopad"><table class="sub">${_hCols(_svcFlex)}'
-          '<tr><td></td><td></td><td></td></tr></table></td></tr>');
-    }
-  }
-  return '<table class="t">${_hCols(_indFlex)}'
-      '<thead><tr>$head</tr></thead><tbody>$body</tbody></table>';
+  final rows = <List<String>>[
+    for (var i = 0; i < vs.length; i++)
+      [
+        _hTd('${i + 1}', center: true),
+        _hTd(_pretty(vs[i].date), center: true),
+        _hTd(vs[i].tin, center: true),
+        _hTd(vs[i].tout, center: true),
+        _hTd(vs[i].complaint.isEmpty ? '-' : vs[i].complaint),
+        _hLines(vs[i].lines),
+      ],
+    if (blankRows)
+      for (var i = 0; i < 6; i++)
+        [for (var c = 0; c < 6; c++) '<td style="height:24px"></td>'],
+  ];
+  return _hTable(
+    [
+      'NO',
+      'DATE',
+      'TIME IN',
+      'TIME OUT',
+      'REASON/COMPLAINT',
+      'SERVICE & FINDING'
+    ],
+    _indFlex,
+    rows,
+  );
 }
 
 String _hSignatures({required bool withRoles}) {
@@ -986,7 +850,7 @@ abstract final class BookletPrint {
               'textLength="170" lengthAdjust="spacingAndGlyphs">LUX MUNDI')
           .replaceFirst('HONESTY', 'INTEGRITY');
   static Future<String> headerSvg() async =>
-    _headerCache ??= await loadSheetHeaderSvg();
+      _headerCache ??= await loadSheetHeaderSvg();
   static Future<String> footerSvg() => _footerSvg();
 
   /// [dateLine]      e.g. "NOV 2, 2026", "November 2-8, 2026",
@@ -997,8 +861,6 @@ abstract final class BookletPrint {
   ///                 "All Institutes" so nothing is printed.
   /// [draftLabel]    maps a service draft to its display name
   ///                 (BP Taking, Temperature Checking, ...).
- 
- 
   static Future<pw.Document> build({
     required BookletReportKind kind,
     required String title,
@@ -1037,7 +899,7 @@ abstract final class BookletPrint {
     final body = <pw.Widget>[];
     switch (kind) {
       case BookletReportKind.service:
-        _service(body, vs, selected);
+        _service(body, vs);
       case BookletReportKind.daily:
         _daily(body, vs);
       case BookletReportKind.individual:
@@ -1159,7 +1021,7 @@ abstract final class BookletPrint {
     if (kind == BookletReportKind.individual) vs = vs.reversed.toList();
 
     final table = switch (kind) {
-      BookletReportKind.service => _serviceHtml(vs, selected),
+      BookletReportKind.service => _serviceHtml(vs),
       BookletReportKind.daily => _dailyHtml(vs),
       BookletReportKind.individual => _hIndividual(vs, blankRows),
       BookletReportKind.byInstitute => _instituteHtml(vs),
@@ -1191,49 +1053,7 @@ ${_hSignatures(withRoles: kind == BookletReportKind.daily)}
     );
   }
 
-  static String _serviceHtml(List<_V> vs, Set<String> selected) {
-    if (selected.length == 1) {
-      ServiceDraft? sample;
-      outer:
-      for (final v in vs) {
-        for (final d in v.drafts) {
-          sample = d;
-          break outer;
-        }
-      }
-      final spec = sample == null ? null : _specFor(sample.serviceId);
-      if (spec != null) {
-        final rows = <List<String>>[];
-        for (var i = 0; i < vs.length; i++) {
-          final v = vs[i];
-          final sessions = v.parts ?? [v];
-          final per = [
-            for (final s in sessions)
-              (s.drafts.isEmpty || s.vc == null)
-                  ? List<String>.filled(spec.headers.length, '')
-                  : spec.cells(_Ctx(
-                      s.drafts.first, s.vc!, s.when, s.drafts.first.label)),
-          ];
-          rows.add([
-            _hTd('${i + 1}', center: true),
-            _hTd(_pretty(v.date, 'MMM d'), center: true),
-            _hTd(v.tin, center: true),
-            _hTd(v.tout, center: true),
-            _hName(v),
-            _hTd(v.inst, center: true),
-            for (var c = 0; c < spec.headers.length; c++)
-              _hTd(per
-                  .map((p) => p[c].isEmpty && per.length > 1 ? '-' : p[c])
-                  .join('\n')),
-          ]);
-        }
-        return _hTable(
-          ['NO', 'DATE', 'IN', 'OUT', 'NAME', 'INSTITUTE', ...spec.headers],
-          [.45, .85, .8, .8, 1.9, .9, ...spec.flex],
-          rows,
-        );
-      }
-    }
+  static String _serviceHtml(List<_V> vs) {
     final rows = <List<String>>[];
     for (var i = 0; i < vs.length; i++) {
       final v = vs[i];
@@ -1257,7 +1077,7 @@ ${_hSignatures(withRoles: kind == BookletReportKind.daily)}
         'NAME',
         'INST',
         'REASON/COMPLAINT',
-        'SERVICES & RESULTS'
+        'SERVICE & FINDING'
       ],
       [.45, .8, .8, .8, 1.7, .7, 2.2, 4.0],
       rows,
@@ -1283,10 +1103,10 @@ ${_hSignatures(withRoles: kind == BookletReportKind.daily)}
         'NO',
         'IN',
         'OUT',
-        'NAME / ID',
+        'NAME',
         'INST',
         'REASON / COMPLAINT',
-        'SERVICES & RESULTS'
+        'SERVICE & FINDING'
       ],
       [.4, .8, .8, 1.6, .55, 2.0, 3.6],
       rows,
@@ -1318,70 +1138,14 @@ ${_hSignatures(withRoles: kind == BookletReportKind.daily)}
         'PROGRAM',
         'YL',
         'REASON/COMPLAINT',
-        'SERVICES & RESULT'
+        'SERVICE & FINDING'
       ],
       [.45, 1.5, 1.6, 1.1, .6, 2.2, 3.7],
       rows,
     );
   }
 
-  static void _service(List<pw.Widget> out, List<_V> vs, Set<String> selected) {
-    if (selected.length == 1) {
-      ServiceDraft? sample;
-      for (final v in vs) {
-        for (final d in v.drafts) {
-          sample = d;
-          break;
-        }
-        if (sample != null) break;
-      }
-      final spec = sample == null ? null : _specFor(sample.serviceId);
-      if (spec != null) {
-        final rows = <List<pw.Widget>>[];
-        for (var i = 0; i < vs.length; i++) {
-          final v = vs[i];
-          // A merged row (AM + PM) shows one line per visit inside each cell.
-          final sessions = v.parts ?? [v];
-          final per = [
-            for (final s in sessions)
-              (s.drafts.isEmpty || s.vc == null)
-                  ? List<String>.filled(spec.headers.length, '')
-                  : spec.cells(_Ctx(
-                      s.drafts.first, s.vc!, s.when, s.drafts.first.label)),
-          ];
-          final cells = [
-            for (var c = 0; c < spec.headers.length; c++)
-              per
-                  .map((p) => p[c].isEmpty && per.length > 1 ? '-' : p[c])
-                  .join('\n'),
-          ];
-          rows.add([
-            _cell('${i + 1}', center: true),
-            _cell(_pretty(v.date, 'MMM d'), center: true),
-            _cell(v.tin, center: true),
-            _cell(v.tout, center: true),
-            _nameCell(v),
-            _cell(v.inst, center: true),
-            for (final c in cells) _cell(c),
-          ]);
-        }
-        out.add(_table(
-          [
-            'NO',
-            'DATE',
-            'IN',
-            'OUT',
-            'NAME',
-            'INSTITUTE',
-            ...spec.headers
-          ],
-          [.45, .85, .8, .8, 1.9, .9, ...spec.flex],
-          rows,
-        ));
-        return;
-      }
-    }
-
+  static void _service(List<pw.Widget> out, List<_V> vs) {
     final rows = <List<pw.Widget>>[];
     for (var i = 0; i < vs.length; i++) {
       final v = vs[i];
@@ -1405,7 +1169,7 @@ ${_hSignatures(withRoles: kind == BookletReportKind.daily)}
         'NAME',
         'INST',
         'REASON/COMPLAINT',
-        'SERVICES & RESULTS'
+        'SERVICE & FINDING'
       ],
       [.45, .8, .8, .8, 1.7, .7, 2.2, 4.0],
       rows,
@@ -1432,10 +1196,10 @@ ${_hSignatures(withRoles: kind == BookletReportKind.daily)}
         'NO',
         'IN',
         'OUT',
-        'NAME / ID',
+        'NAME',
         'INST',
         'REASON / COMPLAINT',
-        'SERVICES & RESULTS'
+        'SERVICE & FINDING'
       ],
       [.4, .8, .8, 1.6, .55, 2.0, 3.6],
       rows,
@@ -1470,7 +1234,7 @@ ${_hSignatures(withRoles: kind == BookletReportKind.daily)}
         'PROGRAM',
         'YL',
         'REASON/COMPLAINT',
-        'SERVICES & RESULT'
+        'SERVICE & FINDING'
       ],
       [.45, 1.5, 1.6, 1.1, .6, 2.2, 3.7],
       rows,

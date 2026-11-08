@@ -1,38 +1,25 @@
+import 'package:flutter/material.dart' show IconData, Icons;
+
 import 'package:clinicmanagementsystem/features/visits/models/clinic_purposes.dart';
 import 'package:clinicmanagementsystem/features/vitals/models/vital_classifier.dart';
 import 'package:clinicmanagementsystem/features/vitals/models/vitals.dart';
 
 enum ServiceFieldKind {
   text,
-
   multiline,
-
   number,
-
   dropdown,
-
   chips,
-
   multiselect,
-
   checkboxes,
-
   date,
-
   readOnly,
-
   sharedVitals,
-
   vitalsCard,
-
   medicationCard,
-
   staffName,
-
   inventoryPick,
-
   linkServiceCard,
-
   notice,
 }
 
@@ -228,9 +215,7 @@ class ServiceField {
 
 enum FieldCondition {
   isOneOf,
-
   startsWith,
-
   noneOf,
 }
 
@@ -254,6 +239,8 @@ class ServiceSlide {
     this.fields = const [],
     this.custom,
     this.groups = const [],
+    this.icon,
+    this.subtitle,
   });
 
   final String title;
@@ -263,6 +250,12 @@ class ServiceSlide {
   final ServiceCustomSlide? custom;
 
   final List<FieldGroup> groups;
+
+  /// Shown in the section header card.
+  final IconData? icon;
+
+  /// One short line under the section title.
+  final String? subtitle;
 }
 
 class ServiceCustomSlide {
@@ -335,11 +328,20 @@ class ServiceFormSpec {
         ...?crossValidate?.call(data).keys,
       ];
 
+  /// Values the app fills in by itself. They never count as "something was
+  /// recorded", otherwise an untouched form would look finished.
+  static const Set<String> kSeededKeys = {
+    'visitor_sex',
+    'session_date',
+    'counsellor',
+  };
+
   /// A service counts as done when something was recorded and nothing typed
   /// is wrong. Empty suggested boxes do not stop it.
   bool isAnswered(Map<String, dynamic> data) {
     if (requiredKeysIn(data).isNotEmpty) return false;
     return data.entries.any((e) {
+      if (kSeededKeys.contains(e.key)) return false;
       final v = e.value;
       if (v == null) return false;
       if (v is List) return v.isNotEmpty;
@@ -443,19 +445,15 @@ const List<String> kConsultationDuration = [
   'More than 3 days',
 ];
 
+/// Background conditions only. Today's symptoms are already in the
+/// complaint ticks, so they are not repeated here.
 const List<String> kConsultationHistory = [
-  'Fever',
-  'Headache',
-  'Cough',
-  'Difficulty Breathing',
-  'Nausea',
-  'Vomiting',
-  'Diarrhea',
-  'Dizziness',
-  'Pain',
-  'Allergy to medicine',
-  'Asthma / known condition',
+  'Asthma',
+  'Diabetes',
+  'Hypertension / heart condition',
+  'Seizure / epilepsy',
   'Taking medicine now',
+  'Similar problem before',
 ];
 
 const List<String> kConsultationTreatment = [
@@ -658,6 +656,10 @@ String counsellingPrivacyLevel(Map<String, dynamic> data) {
   return chosen == 'Restricted' ? 'Restricted' : 'Normal';
 }
 
+/// True when the record is Restricted, either chosen or forced by the app.
+bool _counsellingIsRestricted(Map<String, dynamic> d) =>
+    counsellingPrivacyLevel(d) == 'Restricted';
+
 List<String> consultationRedFlags(Map<String, dynamic> data) {
   final other = _strOf(data['red_flags_other']);
   return [
@@ -762,6 +764,7 @@ String consultationComplaintDetails(Map<String, dynamic> data) {
     _strOf(data['duration_onset']),
   ].where((e) => e.isNotEmpty).join(', ');
   if (duration.isNotEmpty) parts.add('Duration / onset: $duration.');
+  // Old records may still have this. New forms no longer ask for it.
   final additional = _strOf(data['additional_complaint']);
   if (additional.isNotEmpty) parts.add(additional);
   return parts.join('. ');
@@ -775,6 +778,48 @@ String consultationDiagnosis(Map<String, dynamic> data) {
   return '$impression; $secondary';
 }
 
+// ---- Medical Consultation: when a box is worth showing -------------------
+
+/// Complaints where asking for a pain score makes sense.
+const Set<String> kConsultationPainComplaints = {
+  'Headache',
+  'Abdominal Pain',
+  'Toothache',
+  'Sore Throat',
+  'Injury',
+  'Menstrual Concern',
+};
+
+bool consultationHasPain(Map<String, dynamic> d) =>
+    _answersOf(d['symptoms']).any(kConsultationPainComplaints.contains) ||
+    _strOf(d['chief_complaint']).toLowerCase().contains('pain');
+
+bool consultationLongDuration(Map<String, dynamic> d) =>
+    _answersOf(d['duration_onset_choice']).contains('More than 3 days');
+
+/// Allergies only matter when medicine is going to be given.
+bool consultationGivesMedicine(Map<String, dynamic> d) =>
+    _answersOf(d['treatment']).contains('Medication');
+
+/// LMP is asked only for a female visitor with a related complaint.
+bool consultationAsksLmp(Map<String, dynamic> d) {
+  if ('${d['visitor_sex'] ?? ''}'.trim().toLowerCase() != 'female') {
+    return false;
+  }
+  return _answersOf(d['symptoms']).any(const [
+    'Menstrual Concern',
+    'Abdominal Pain',
+    'Dizziness',
+    'Stomach Upset',
+  ].contains);
+}
+
+/// Excuse slip and guardian only matter when the visitor leaves the clinic.
+bool consultationLeavesClinic(Map<String, dynamic> d) {
+  final x = _strOf(d['disposition']);
+  return x == 'Sent Home' || kConsultationReferralDispositions.contains(x);
+}
+
 ServiceFieldValidator _notPastDate(String what) => (value) {
       final s = value == null ? '' : '$value'.trim();
       if (s.isEmpty) return null;
@@ -783,6 +828,17 @@ ServiceFieldValidator _notPastDate(String what) => (value) {
       final now = DateTime.now();
       final today = DateTime(now.year, now.month, now.day);
       if (picked.isBefore(today)) return 'The $what cannot be in the past.';
+      return null;
+    };
+
+ServiceFieldValidator _notFutureDate(String what) => (value) {
+      final s = value == null ? '' : '$value'.trim();
+      if (s.isEmpty) return null;
+      final picked = DateTime.tryParse(s);
+      if (picked == null) return null;
+      final now = DateTime.now();
+      final today = DateTime(now.year, now.month, now.day);
+      if (picked.isAfter(today)) return 'The $what cannot be in the future.';
       return null;
     };
 
@@ -1430,7 +1486,7 @@ const String kVitalsSelectedKey = 'vitals_selected';
 const String kSelectAllLabel = 'Select All';
 
 const List<String> kVitalChoices = [
-  'Blood Pressure',  
+  'Blood Pressure',
   'Temperature',
   'Pulse',
   'Respiratory Rate',
@@ -1438,7 +1494,13 @@ const List<String> kVitalChoices = [
 ];
 
 const Map<String, List<String>> kVitalChoiceKeys = {
-  'Blood Pressure': ['systolic', 'diastolic', 'position', 'arm_used', 'bp_assessment'],
+  'Blood Pressure': [
+    'systolic',
+    'diastolic',
+    'position',
+    'arm_used',
+    'bp_assessment'
+  ],
   'Temperature': ['temp_c', 'method', 'temp_assessment'],
   'Pulse': ['pulse_bpm', 'pulse_assessment'],
   'Respiratory Rate': ['resp_rate', 'resp_assessment'],
@@ -1535,6 +1597,8 @@ const Map<String, String> kOptionLabels = {
   'Referred to Physician / Healthcare Facility': 'Referred to doctor / hospital',
   'Physician': 'Doctor',
   'Nurse + Physician': 'Nurse + doctor',
+  'Hypertension / heart condition': 'High BP / heart condition',
+  'Seizure / epilepsy': 'Seizures / epilepsy',
   // Health Counselling
   'Mental/Emotional Well-being': 'Mental health',
   'Medication / Treatment Adherence': 'Following treatment',
@@ -1627,15 +1691,27 @@ class VisitServiceForms {
         VisitServiceForms.reviewSlide,
       ],
     ),
+
+    // =====================================================================
+    // HEALTH COUNSELLING
+    // Only boxes that fit the session are shown:
+    //  - group size: only for a Group session
+    //  - "what happened": only when understanding was not "Understood"
+    //  - privacy chips: only when the app is not already forcing Restricted
+    //  - referral boxes: only when a warning sign was ticked
+    //  - follow-up boxes: only when follow-up is Yes
+    // =====================================================================
     'health_counselling': ServiceFormSpec(
       serviceId: 'health_counselling',
       referralTitle:
           'Refer to the Guidance Counselor or Clinic Head today. Do not leave '
-          'the student alone if there is a risk of self-harm.',
+          'the person alone if there is a risk of self-harm.',
       referralReasons: (data, _) => counsellingReferralReasons(data),
       slides: [
         ServiceSlide(
-          title: 'Counselling Information',
+          title: 'Session',
+          icon: Icons.event_note_outlined,
+          subtitle: 'Who, why and what was discussed',
           fields: [
             ServiceField(
               key: 'counsellor',
@@ -1654,11 +1730,11 @@ class VisitServiceForms {
             ),
             ServiceField(
               key: 'referral_source',
-              label: 'Why did the student come?',
+              label: 'Why did they come?',
               kind: ServiceFieldKind.chips,
               options: kCounsellingReferralSource,
               required: true,
-              note: 'Who sent the student. Pick one.',
+              note: 'Who sent them. Pick one.',
             ),
             ServiceField(
               key: 'session_type',
@@ -1670,14 +1746,13 @@ class VisitServiceForms {
               width: FieldWidth.half,
             ),
             ServiceField(
-              key: 'privacy_level',
-              otherOption: false,
-              label: 'Privacy level',
-              kind: ServiceFieldKind.chips,
-              options: kCounsellingPrivacyLevels,
-              required: true,
+              key: 'group_size',
+              label: 'How many in the group?',
+              kind: ServiceFieldKind.number,
               width: FieldWidth.half,
-              note: 'Sensitive topics or a referral set it to Restricted.',
+              validate: _vitalWhole(2, 100),
+              shownWhenKey: 'session_type',
+              shownWhenValues: ['Group'],
             ),
             ServiceField(
               key: 'topic',
@@ -1687,24 +1762,45 @@ class VisitServiceForms {
               required: true,
               note: 'Tick all that were discussed.',
             ),
-            const ServiceField(
-              key: 'privacy_notice',
-              label: '',
-              kind: ServiceFieldKind.notice,
-              width: FieldWidth.full,
-            ),
             ServiceField(
               key: 'reason',
               label: 'Reason / Concern',
               kind: ServiceFieldKind.multiline,
               maxChars: 300,
               validate: _cappedLength(300, 'the reason'),
-              note: 'Why the student needed counselling.',
+              note: 'Why counselling was needed.',
+            ),
+            ServiceField(
+              key: 'concern_signs',
+              label: 'Warning signs check',
+              kind: ServiceFieldKind.checkboxes,
+              options: kCounsellingConcernSigns,
+              required: true,
+              note: 'Tick None if no concern. Any sign means refer today and '
+                  'the record becomes Restricted.',
+            ),
+            ServiceField(
+              key: 'privacy_level',
+              otherOption: false,
+              label: 'Privacy level',
+              kind: ServiceFieldKind.chips,
+              options: kCounsellingPrivacyLevels,
+              shownWhenPredicate: (d) => !counsellingAutoRestricted(d),
+              note: 'Sensitive topics or a warning sign set it to Restricted '
+                  'automatically.',
+            ),
+            const ServiceField(
+              key: 'privacy_notice',
+              label: '',
+              kind: ServiceFieldKind.notice,
+              shownWhenPredicate: _counsellingIsRestricted,
             ),
           ],
         ),
         ServiceSlide(
-          title: 'Counselling Provided',
+          title: 'Counselling Given',
+          icon: Icons.record_voice_over_outlined,
+          subtitle: 'What was done and how it went',
           fields: [
             ServiceField(
               key: 'provided',
@@ -1717,18 +1813,29 @@ class VisitServiceForms {
             ServiceField(
               key: 'understanding',
               otherOption: false,
-              label: 'Student understanding',
+              label: 'Understanding',
               kind: ServiceFieldKind.chips,
               options: kCounsellingUnderstanding,
               required: true,
             ),
             ServiceField(
               key: 'student_response',
-              label: 'Student response',
+              label: 'What happened?',
               kind: ServiceFieldKind.text,
               maxChars: 200,
               validate: _cappedLength(200, 'the response'),
-              note: 'What they said or did, in one line.',
+              note: 'In one line: what they said or did.',
+              shownWhenKey: 'understanding',
+              shownWhenValues: ['Needs more explanation', 'Not receptive'],
+            ),
+            ServiceField(
+              key: 'action_plan',
+              label: 'What they agreed to do',
+              kind: ServiceFieldKind.text,
+              maxChars: 200,
+              validate: _cappedLength(200, 'the plan'),
+              hint: 'e.g. sleep before 10 PM, talk to adviser',
+              note: 'The next step they agreed on. Optional.',
             ),
             ServiceField(
               key: 'duration_minutes',
@@ -1738,13 +1845,13 @@ class VisitServiceForms {
               width: FieldWidth.half,
               validate: _vitalWhole(1, 180),
             ),
-            ServiceField(
-              key: 'concern_signs',
-              label: 'Warning signs check',
-              kind: ServiceFieldKind.checkboxes,
-              options: kCounsellingConcernSigns,
-              note: 'Any sign means refer today. Record becomes Restricted.',
-            ),
+          ],
+        ),
+        ServiceSlide(
+          title: 'Next Steps',
+          icon: Icons.flag_outlined,
+          subtitle: 'Referral and follow-up',
+          fields: [
             ServiceField(
               key: 'guardian_informed',
               otherOption: false,
@@ -1753,24 +1860,24 @@ class VisitServiceForms {
               options: kCounsellingGuardian,
               required: true,
               width: FieldWidth.half,
-              shownWhenPredicate: (data) =>
-                  counsellingReferralReasons(data).isNotEmpty,
+              shownWhenPredicate: (d) =>
+                  counsellingReferralReasons(d).isNotEmpty,
             ),
             ServiceField(
               key: 'referred_to',
               label: 'Referred to (name or place)',
               kind: ServiceFieldKind.text,
               required: true,
-              shownWhenPredicate: (data) =>
-                  counsellingReferralReasons(data).isNotEmpty,
+              shownWhenPredicate: (d) =>
+                  counsellingReferralReasons(d).isNotEmpty,
               note: 'e.g. Guidance Counselor or hospital.',
             ),
             ServiceField(
               key: 'referral_reason',
               label: 'Reason for referral',
               kind: ServiceFieldKind.text,
-              shownWhenPredicate: (data) =>
-                  counsellingReferralReasons(data).isNotEmpty,
+              shownWhenPredicate: (d) =>
+                  counsellingReferralReasons(d).isNotEmpty,
             ),
             ServiceField(
               key: 'follow_up_needed',
@@ -1782,21 +1889,22 @@ class VisitServiceForms {
               width: FieldWidth.half,
             ),
             ServiceField(
+              key: 'follow_up_date',
+              label: 'Follow-up date',
+              kind: ServiceFieldKind.date,
+              width: FieldWidth.half,
+              validate: _notPastDate('follow-up date'),
+              shownWhenKey: 'follow_up_needed',
+              shownWhenValues: ['Yes'],
+              note: 'Today or later only.',
+            ),
+            ServiceField(
               key: 'follow_up_reason',
               label: 'Reason for follow-up',
               kind: ServiceFieldKind.text,
               required: true,
               shownWhenKey: 'follow_up_needed',
               shownWhenValues: ['Yes'],
-            ),
-            ServiceField(
-              key: 'follow_up_date',
-              label: 'Follow-up date',
-              kind: ServiceFieldKind.date,
-              width: FieldWidth.half,
-              shownWhenKey: 'follow_up_needed',
-              shownWhenValues: ['Yes'],
-              note: 'Today or later only.',
             ),
             ServiceField(
               key: 'bmi_link',
@@ -2503,6 +2611,21 @@ class VisitServiceForms {
         VisitServiceForms.reviewSlide,
       ],
     ),
+
+    // =====================================================================
+    // MEDICAL CONSULTATION
+    // Only boxes that fit the case are shown:
+    //  - pain level: only for painful complaints
+    //  - "since when": only when the problem is more than 3 days old
+    //  - history details: only after a known condition is ticked
+    //  - LMP: only for a female visitor with a related complaint
+    //  - allergies: only when "Medication" is ticked in Treatment
+    //  - medication card: only when "Medication" is ticked
+    //  - "other condition": only after an impression is typed
+    //  - guardian / excuse slip: only when sent home or referred
+    //  - referral boxes: only when referred
+    //  - follow-up boxes: only when follow-up is Yes
+    // =====================================================================
     'medicine_consultation': ServiceFormSpec(
       serviceId: 'medicine_consultation',
       referralReasons: (data, vitals) =>
@@ -2511,6 +2634,8 @@ class VisitServiceForms {
       slides: [
         ServiceSlide(
           title: 'Complaint',
+          icon: Icons.chat_bubble_outline_rounded,
+          subtitle: 'Why the patient came and any danger signs',
           fields: [
             ServiceField(
               key: 'chief_complaint',
@@ -2523,34 +2648,50 @@ class VisitServiceForms {
             ServiceField(
               key: 'symptoms',
               otherKey: 'symptom_other',
-              label: 'Common complaints (tick if any)',
+              label: 'Complaint category (tick any)',
               kind: ServiceFieldKind.checkboxes,
               options: kConsultationComplaints,
+              note: 'Quick pick. Helps clinic reports.',
             ),
             ServiceField(
               key: 'duration_onset_choice',
               otherOption: false,
-              label: 'How long',
+              label: 'How long?',
               kind: ServiceFieldKind.chips,
               options: kConsultationDuration,
-              width: FieldWidth.half,
             ),
             ServiceField(
               key: 'duration_onset',
-              label: 'Exact time',
+              label: 'Since when / how many days?',
               kind: ServiceFieldKind.text,
-              hint: 'e.g. started 2 days ago',
+              hint: 'e.g. 5 days',
               width: FieldWidth.half,
+              shownWhenPredicate: consultationLongDuration,
             ),
             ServiceField(
-              key: 'additional_complaint',
-              label: 'More about the complaint',
-              kind: ServiceFieldKind.text,
+              key: 'pain_level',
+              label: 'Pain level (0 = none, 10 = worst)',
+              kind: ServiceFieldKind.number,
+              unit: '/10',
+              width: FieldWidth.half,
+              validate: _painWholeScore(),
+              shownWhenPredicate: consultationHasPain,
+            ),
+            ServiceField(
+              key: 'red_flags',
+              label: 'Danger signs check',
+              kind: ServiceFieldKind.checkboxes,
+              options: kConsultationRedFlags,
+              required: true,
+              note:
+                  'Tick None if there are no danger signs. Any sign means referral.',
             ),
           ],
         ),
         ServiceSlide(
-          title: 'History',
+          title: 'Vitals & History',
+          icon: Icons.monitor_heart_outlined,
+          subtitle: 'Today\'s readings and background conditions',
           fields: [
             ServiceField(
               key: 'vitals_card',
@@ -2560,78 +2701,68 @@ class VisitServiceForms {
             ),
             ServiceField(
               key: 'history',
-              label: 'Related history',
+              label: 'Known conditions (tick if any)',
               kind: ServiceFieldKind.checkboxes,
               options: kConsultationHistory,
             ),
             ServiceField(
-              key: 'lmp_concern',
-              otherOption: false,
-              label: 'Menstrual concern',
-              kind: ServiceFieldKind.checkboxes,
-              options: const ['LMP / menstruation concern'],
-              shownWhenPredicate: (data) =>
-                  '${data['visitor_sex'] ?? ''}'.trim().toLowerCase() ==
-                  'female',
-            ),
-            ServiceField(
-              key: 'known_allergies',
-              otherOption: false,
-              label: 'Known allergies?',
-              kind: ServiceFieldKind.chips,
-              options: kYesNoUnknown,
-              width: FieldWidth.half,
-            ),
-            ServiceField(
-              key: 'allergy_specify',
-              label: 'Allergic to what?',
-              kind: ServiceFieldKind.text,
-              required: true,
-              width: FieldWidth.half,
-              shownWhenKey: 'known_allergies',
-              shownWhenValues: ['Yes'],
-            ),
-            ServiceField(
               key: 'history_details',
-              label: 'History details',
+              label: 'Details of the condition / medicine taken',
               kind: ServiceFieldKind.multiline,
-              note: 'Medicines taken, past illness, pregnancy.',
+              maxChars: 300,
+              validate: _cappedLength(300, 'the details'),
+              shownWhenPredicate: (d) => _answersOf(d['history']).isNotEmpty,
+            ),
+            ServiceField(
+              key: 'lmp_date',
+              label: 'Last menstrual period (LMP)',
+              kind: ServiceFieldKind.date,
+              width: FieldWidth.half,
+              validate: _notFutureDate('LMP date'),
+              shownWhenPredicate: consultationAsksLmp,
+              note: 'Asked because of the complaint. Optional.',
             ),
           ],
         ),
         ServiceSlide(
-          title: 'Examination & Assessment',
+          title: 'Assessment',
+          icon: Icons.fact_check_outlined,
+          subtitle: 'What was found and by whom',
           fields: [
             ServiceField(
               key: 'physical_exam',
-              label: 'Physical exam findings',
+              label: 'Examination findings',
               kind: ServiceFieldKind.multiline,
-              required: true,
+              maxChars: 500,
+              note: 'Only what was actually checked. Optional.',
             ),
             ServiceField(
               key: 'clinical_impression',
-              label: 'Clinical impression',
+              label: 'Assessment / impression',
               kind: ServiceFieldKind.multiline,
               required: true,
-              note: 'The clinician\'s working diagnosis.',
+              note: 'Working impression. Not a final diagnosis.',
             ),
             ServiceField(
               key: 'secondary_diagnosis',
               label: 'Other condition found',
               kind: ServiceFieldKind.text,
+              shownWhenPredicate: (d) =>
+                  _strOf(d['clinical_impression']).isNotEmpty,
             ),
             ServiceField(
-              key: 'red_flags',
-              label: 'Danger signs',
-              kind: ServiceFieldKind.checkboxes,
-              options: kConsultationRedFlags,
-              required: true,
-              note: 'Tick all present, or None. Any sign means referral.',
+              key: 'attending',
+              otherOption: false,
+              label: 'Examined by',
+              kind: ServiceFieldKind.chips,
+              options: kAttendingStaff,
             ),
           ],
         ),
         ServiceSlide(
           title: 'Treatment',
+          icon: Icons.healing_outlined,
+          subtitle: 'What was done in the clinic',
           fields: [
             ServiceField(
               key: 'treatment',
@@ -2641,20 +2772,31 @@ class VisitServiceForms {
               required: true,
             ),
             ServiceField(
+              key: 'known_allergies',
+              otherOption: false,
+              label: 'Any known allergy? (check before giving medicine)',
+              kind: ServiceFieldKind.chips,
+              options: kYesNoUnknown,
+              required: true,
+              width: FieldWidth.half,
+              shownWhenPredicate: consultationGivesMedicine,
+            ),
+            ServiceField(
+              key: 'allergy_specify',
+              label: 'Allergic to what?',
+              kind: ServiceFieldKind.text,
+              required: true,
+              width: FieldWidth.half,
+              shownWhenPredicate: (d) =>
+                  consultationGivesMedicine(d) &&
+                  _strOf(d['known_allergies']) == 'Yes',
+            ),
+            ServiceField(
               key: 'medication_card',
               label: 'Medication',
               kind: ServiceFieldKind.medicationCard,
-              shownWhenKey: 'treatment',
-              shownWhenValues: ['Medication'],
-              note: 'Give it in Medication to deduct stock.',
-            ),
-            ServiceField(
-              key: 'medication_summary',
-              label: 'Medicine planned (name and dose)',
-              kind: ServiceFieldKind.text,
-              width: FieldWidth.half,
-              shownWhenKey: 'treatment',
-              shownWhenValues: ['Medication'],
+              shownWhenPredicate: consultationGivesMedicine,
+              note: 'Record it in Medication to deduct stock.',
             ),
             ServiceField(
               key: 'wound_link',
@@ -2684,19 +2826,24 @@ class VisitServiceForms {
               width: FieldWidth.half,
               hint: 'e.g. 30',
               validate: _minutesWhole(),
-              shownWhenKey: 'treatment',
-              shownWhenValues: ['Rest / Observation'],
+              shownWhenPredicate: (d) =>
+                  _answersOf(d['treatment']).contains('Rest / Observation') ||
+                  _strOf(d['disposition']).startsWith('Rested'),
             ),
             ServiceField(
               key: 'management_details',
-              label: 'Treatment details',
+              label: 'Treatment notes',
               kind: ServiceFieldKind.multiline,
-              note: 'What was actually done.',
+              maxChars: 300,
+              validate: _cappedLength(300, 'the notes'),
+              note: 'Anything not covered above. Optional.',
             ),
           ],
         ),
         ServiceSlide(
           title: 'Plan & Disposition',
+          icon: Icons.alt_route_rounded,
+          subtitle: 'What happens next',
           fields: [
             ServiceField(
               key: 'disposition',
@@ -2722,26 +2869,44 @@ class VisitServiceForms {
               options: kYesNo,
               required: true,
               width: FieldWidth.half,
-              shownWhenPredicate: (data) {
-                final disposition = _strOf(data['disposition']);
-                return disposition == 'Sent Home' ||
-                    kConsultationReferralDispositions.contains(disposition);
-              },
+              shownWhenPredicate: consultationLeavesClinic,
             ),
             ServiceField(
               key: 'referred_to',
               label: 'Which hospital / clinic / doctor?',
               kind: ServiceFieldKind.text,
               required: true,
-              shownWhenPredicate: (data) => kConsultationReferralDispositions
-                  .contains(_strOf(data['disposition'])),
+              shownWhenPredicate: (d) => kConsultationReferralDispositions
+                  .contains(_strOf(d['disposition'])),
             ),
             ServiceField(
               key: 'referral_reason',
               label: 'Reason for referral',
               kind: ServiceFieldKind.text,
-              shownWhenPredicate: (data) => kConsultationReferralDispositions
-                  .contains(_strOf(data['disposition'])),
+              shownWhenPredicate: (d) => kConsultationReferralDispositions
+                  .contains(_strOf(d['disposition'])),
+            ),
+            ServiceField(
+              key: 'excuse_slip_needed',
+              otherOption: false,
+              label: 'Excuse slip needed?',
+              kind: ServiceFieldKind.chips,
+              options: kYesNo,
+              width: FieldWidth.half,
+              shownWhenPredicate: consultationLeavesClinic,
+              note: 'Printed in Medical Certificate.',
+            ),
+            ServiceField(
+              key: 'excuse_days',
+              label: 'Days excused',
+              kind: ServiceFieldKind.number,
+              unit: 'days',
+              width: FieldWidth.half,
+              hint: 'e.g. 2',
+              validate: _excuseDaysWhole(),
+              shownWhenPredicate: (d) =>
+                  consultationLeavesClinic(d) &&
+                  _strOf(d['excuse_slip_needed']) == 'Yes',
             ),
             ServiceField(
               key: 'follow_up_needed',
@@ -2769,34 +2934,6 @@ class VisitServiceForms {
               shownWhenValues: ['Yes'],
             ),
             ServiceField(
-              key: 'excuse_slip_needed',
-              otherOption: false,
-              label: 'Excuse slip needed?',
-              kind: ServiceFieldKind.chips,
-              options: kYesNo,
-              width: FieldWidth.half,
-              note: 'Printed in Medical Certificate.',
-            ),
-            ServiceField(
-              key: 'excuse_days',
-              label: 'Days excused',
-              kind: ServiceFieldKind.number,
-              unit: 'days',
-              width: FieldWidth.half,
-              hint: 'e.g. 2',
-              validate: _excuseDaysWhole(),
-              shownWhenKey: 'excuse_slip_needed',
-              shownWhenValues: ['Yes'],
-            ),
-            ServiceField(
-              key: 'attending',
-              label: 'Attending',
-              kind: ServiceFieldKind.dropdown,
-              options: kAttendingStaff,
-              width: FieldWidth.half,
-              note: 'Who examined the patient.',
-            ),
-            ServiceField(
               key: 'counselling_link',
               label: 'Health Counselling',
               kind: ServiceFieldKind.linkServiceCard,
@@ -2804,7 +2941,7 @@ class VisitServiceForms {
               buttonLabel: 'Consider Health Counselling',
               shownWhenPredicate: (data) {
                 final words =
-                    '${data['chief_complaint'] ?? ''} ${data['additional_complaint'] ?? ''}'
+                    '${data['chief_complaint'] ?? ''} ${data['history_details'] ?? ''}'
                         .toLowerCase();
                 return const [
                   'stress',
@@ -2841,7 +2978,7 @@ class VisitServiceForms {
       allowOther: false,
       crossValidate: _vitalSignsCrossRules,
       slides: [
-                ServiceSlide(
+        ServiceSlide(
           title: 'Readings',
           groups: [
             FieldGroup(kVitalChoiceKeys['Blood Pressure']!,
@@ -3001,7 +3138,6 @@ class VisitServiceForms {
               shownWhenValues: const ['Respiratory Rate'],
               note: 'Calculated from the breathing rate.',
             ),
-           
             // ---- Oxygen saturation ----
             ServiceField(
               key: 'o2_sat',
@@ -3027,7 +3163,6 @@ class VisitServiceForms {
             ),
           ],
         ),
-        
         ServiceSlide(
           title: 'Action & Referral',
           fields: [

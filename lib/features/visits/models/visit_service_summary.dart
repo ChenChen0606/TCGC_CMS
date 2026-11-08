@@ -26,6 +26,7 @@ List<SummarySection> serviceSummary(ServiceDraft draft, VisitVitals vitals,
   const restrictedKeys = {
     'reason',
     'student_response',
+    'action_plan',
     'concern_signs',
     'notes',
   };
@@ -41,10 +42,12 @@ List<SummarySection> serviceSummary(ServiceDraft draft, VisitVitals vitals,
           f.kind == ServiceFieldKind.notice) {
         continue;
       }
+      // A box that is not shown for this case must not appear in the review.
+      if (!f.isShownIn(draft.data)) continue;
 
       if (_foldedOtherKeys(draft).contains(f.key)) continue;
       if (hideRestricted && restrictedKeys.contains(f.key)) continue;
-            var value = summaryValue(draft, f);
+      var value = summaryValue(draft, f);
       if (f.kind == ServiceFieldKind.readOnly) {
         value = _autoSummary(f.key, vitals) ?? value;
       }
@@ -102,14 +105,14 @@ List<SummarySection> serviceSummary(ServiceDraft draft, VisitVitals vitals,
     ]));
   }
 
-    final wantsVitals = draft.serviceId != 'bpi' &&
+  final wantsVitals = draft.serviceId != 'bpi' &&
       draft.spec.slides.any((s) => s.fields.any((f) =>
-      f.kind == ServiceFieldKind.sharedVitals ||
-      f.kind == ServiceFieldKind.vitalsCard ||
-      f.vital != null));
+          f.kind == ServiceFieldKind.sharedVitals ||
+          f.kind == ServiceFieldKind.vitalsCard ||
+          f.vital != null));
   if (wantsVitals) {
     final readings = <SummaryRow>[
-            for (final r in [
+      for (final r in [
         vitals.bloodPressure,
         vitals.heartRateReading,
         vitals.respRateReading,
@@ -193,6 +196,7 @@ Set<String> _foldedOtherKeys(ServiceDraft draft) {
   final lists = folded[draft.serviceId] ?? const <String>[];
   return {for (final k in lists) '${k}_other'};
 }
+
 String? _autoSummary(String key, VisitVitals v) => switch (key) {
       'bmi' => v.bmi?.toStringAsFixed(1),
       'bmi_class' => v.bmiReading?.category,

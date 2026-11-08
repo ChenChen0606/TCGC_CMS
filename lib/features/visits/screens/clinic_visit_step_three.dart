@@ -193,6 +193,7 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
             birthDate: DateTime.tryParse(_v.birthDate),
             asOf: widget.visitStamp ?? DateTime.now(),
           );
+          _c.draftFor('medicine_consultation')?.data['visitor_sex'] = _v.sex;
           final draft = _c.active;
 
           if (_showAllErrorsFor != draft?.serviceId) {
@@ -671,52 +672,90 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
     ];
   }
 
-  Widget _section(ServiceDraft d, int index, ServiceSlide slide) {
+    Widget _section(ServiceDraft d, int index, ServiceSlide slide) {
     final custom = slide.custom;
-    if (custom != null) {
-      return _customSlide(d, custom.id);
-    }
+    if (custom != null) return _customSlide(d, custom.id);
     final shown = d.spec.visibleFields(slide, d.data);
     if (shown.isEmpty) return const SizedBox.shrink();
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        _sectionHeader(index, slide),
-        const SizedBox(height: 12),
-        ..._fieldGrid(d, shown, slide.groups),
-      ],
+    return Container(
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _sectionHeader(index, slide),
+          const Divider(color: AppColors.border, height: 1),
+          Padding(
+            padding: const EdgeInsets.all(14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: _fieldGrid(d, shown, slide.groups),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
   Widget _sectionHeader(int index, ServiceSlide slide) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        Text(
-          '${index + 1}.',
-          style: const TextStyle(
-            fontSize: 13,
-            fontWeight: FontWeight.w800,
-            color: AppColors.primary,
+    return Container(
+      color: AppColors.bgAlt,
+      padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+      child: Row(
+        children: [
+          Container(
+            width: 28,
+            height: 28,
+            decoration: const BoxDecoration(
+              color: AppColors.primaryContainer,
+              shape: BoxShape.circle,
+            ),
+            child: Icon(slide.icon ?? Icons.notes_rounded,
+                size: 15, color: AppColors.primaryDark),
           ),
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Text(
-            slide.title,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w700,
-              color: AppColors.textMain,
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  slide.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.textMain,
+                  ),
+                ),
+                if (slide.subtitle != null)
+                  Text(
+                    slide.subtitle!,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                        fontSize: 11, color: AppColors.textMuted),
+                  ),
+              ],
             ),
           ),
-        ),
-      ],
+          Text(
+            '${index + 1}',
+            style: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+              color: AppColors.textMuted,
+            ),
+          ),
+        ],
+      ),
     );
   }
-
   Widget _formHeader(ServiceDraft d) {
     final isBp = d.serviceId == 'bp_tracking';
     return Padding(

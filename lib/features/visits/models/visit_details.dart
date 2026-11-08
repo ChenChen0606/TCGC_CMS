@@ -230,10 +230,9 @@ class ServiceDraft {
             ? ServiceDraftStatus.inProgress
             : ServiceDraftStatus.notStarted);
   }
+  
 
-  Map<String, dynamic> toJson() => {
-        ...data,
-      };
+   Map<String, dynamic> toJson() => {...data}..remove('visitor_sex');
 
   void loadFromJson(Map<String, dynamic> json) {
     for (final e in json.entries) {
@@ -571,13 +570,16 @@ class VisitDetailsController extends ChangeNotifier {
       {int max = 0}) {
     final d = draftFor(serviceId);
     if (d == null) return;
-    final current = List<String>.from(d.chosen(key));
+        final current = List<String>.from(d.chosen(key));
     if (max > 0) {
       d.set(key, [option]);
     } else if (current.contains(option)) {
       current.remove(option);
       d.set(key, current);
+    } else if (option == 'None' || option == 'None of these') {
+      d.set(key, [option]);
     } else {
+      current.removeWhere((e) => e == 'None' || e == 'None of these');
       current.add(option);
       d.set(key, current);
     }
