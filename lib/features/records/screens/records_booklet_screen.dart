@@ -496,23 +496,21 @@ class RecordsBookletState extends State<RecordsBooklet> {
     return b == null ? null : _ageFromDate(b);
   }
 
-  /// Every age that exists in the database (calculated from birth dates).
-  List<int> get _ageOptions {
-    if (_ageCache != null && _ageVer == _dataVersion) return _ageCache!;
-    final ages = <int>{};
-    for (final p in _rosterById.values) {
-      final b = p.birthDate;
-      if (b == null) continue;
-      final a = _ageFromDate(b);
-      if (a != null) ages.add(a);
-    }
-    for (final r in _allRecords) {
-      final a = _ageOf(r["birthDate"]);
-      if (a != null) ages.add(a);
-    }
-    _ageVer = _dataVersion;
-    return _ageCache = ages.toList()..sort();
-  }
+      List<int> get _ageOptions {
+        final ages = <int>{};
+        // Apply every filter except Age itself, so the selected age
+        // does not hide the other choices.
+        final saved = selectedAge;
+        selectedAge = null;
+        final records = _getFilteredRecords();
+        selectedAge = saved;
+
+        for (final r in records) {
+          final a = _ageOf(r["birthDate"]);
+          if (a != null) ages.add(a);
+        }
+        return ages.toList()..sort();
+      }
 
   // ---- filter cache ------------------------------------------------------
   String get _filterSig => [
