@@ -207,7 +207,7 @@ class RecordsBookletState extends State<RecordsBooklet> {
     static final Set<String> _detailsDone = {};
   static final Map<String, int> _timeKeyCache = {};
   static String? _cacheUser;
-
+  static bool _everLoaded = false;
   final Set<Future<void>> _inflight = {};
 
   String? _loadError;
@@ -246,9 +246,17 @@ class RecordsBookletState extends State<RecordsBooklet> {
       _savedVisits.clear();
       _rosterById.clear();
       _detailsRequested.clear();
+      _everLoaded = false;
       _cacheUser = uid;
     }
-
+    // Paint what was downloaded at sign-in / last visit at once.
+    if (_allRecords.isEmpty) {
+      final cached = VisitService.peekBookletRecords();
+      if (cached != null && cached.isNotEmpty) {
+        _allRecords.addAll(cached);
+        _everLoaded = true;
+      }
+    }
     _reloadRecords();
     _dataListener = () {
       _debounce?.cancel();
@@ -308,6 +316,7 @@ class RecordsBookletState extends State<RecordsBooklet> {
         _loadError = null;
       });
       _lastLoad = DateTime.now();
+      _everLoaded = true;
     } catch (e) {
       if (!mounted || token != _reloadToken) return;
       setState(() => _loadError = _describeReadFailure(e));
@@ -3579,14 +3588,14 @@ class RecordsBookletState extends State<RecordsBooklet> {
     });
     // Wait for the services of the visible rows, so they appear together
     // with the table instead of popping in later.
-    if (_lastShownIds.any((i) => !_detailsDone.contains(i))) {
+   /* if (_lastShownIds.any((i) => !_detailsDone.contains(i))) {
       return const Center(child: CircularProgressIndicator(strokeWidth: 3));
-    }
+    }*/
     final isAll = type == null;
     final isStudent = type == 'Student';
     final isFaculty = type == 'Faculty';
     final isStaff = !isAll && !isStudent && !isFaculty;
-
+    if (!_everLoaded && _loadError == null) return const SizedBox.shrink();
     if (allGroups.isEmpty) {
       if (_loadError != null) {
         return Container(

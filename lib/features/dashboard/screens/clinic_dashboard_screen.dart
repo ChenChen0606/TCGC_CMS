@@ -18,7 +18,7 @@ import 'package:clinicmanagementsystem/features/auth/screens/login_screen.dart';
 import 'package:clinicmanagementsystem/features/records/screens/records_booklet_screen.dart';
 import 'package:clinicmanagementsystem/features/account/screens/account_screen.dart';
 import 'package:clinicmanagementsystem/core/theme/app_colors.dart';
-
+import 'package:clinicmanagementsystem/core/services/profile_state.dart';
 class ClinicDashboard extends StatefulWidget {
   final String userRole;
   final String userEmail;
@@ -45,6 +45,8 @@ class _ClinicDashboardState extends State<ClinicDashboard> {
   void initState() {
     super.initState();
 
+    ProfileState.set(widget.userName);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _prebuildTabs());
     if (browserHistoryEnabled) {
       initTabHistory((index) {
         if (index < 0 || index > _lastTabIndex) return;
@@ -57,7 +59,13 @@ class _ClinicDashboardState extends State<ClinicDashboard> {
       });
     }
   }
-
+  Future<void> _prebuildTabs() async {
+    for (final i in const [1, 2, 5, 3, 4, 6, 7]) {
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      if (!mounted) return;
+      if (!_visited.contains(i)) setState(() => _visited.add(i));
+    }
+  }
   @override
   void dispose() {
     disposeTabHistory();
@@ -69,15 +77,21 @@ class _ClinicDashboardState extends State<ClinicDashboard> {
   int get _lastTabIndex => 7;
 
   List<Widget> get _pages => [
-        DashboardOverview(
-          isActive: _selectedIndex == 0,
-          onNavigate: _onItemTapped,
-          userName: widget.userName,
+        ValueListenableBuilder<String>(
+          valueListenable: ProfileState.displayName,
+          builder: (_, name, __) => DashboardOverview(
+            isActive: _selectedIndex == 0,
+            onNavigate: _onItemTapped,
+            userName: name.isEmpty ? widget.userName : name,
+          ),
         ),
-        ClinicVisitScreen(
-          isActive: _selectedIndex == 1,
-          userName: widget.userName,
-          userRole: widget.userRole,
+        ValueListenableBuilder<String>(
+          valueListenable: ProfileState.displayName,
+          builder: (_, name, __) => ClinicVisitScreen(
+            isActive: _selectedIndex == 1,
+            userName: name.isEmpty ? widget.userName : name,
+            userRole: widget.userRole,
+          ),
         ),
         const IndividualRecordScreen(),
         const BmiRecordsScreen(),
@@ -288,10 +302,13 @@ class _ClinicDashboardState extends State<ClinicDashboard> {
       ),
     );
   }
+  String get _currentName => ProfileState.displayName.value.isNotEmpty
+      ? ProfileState.displayName.value
+      : widget.userName;
 
   Widget _buildUserAvatar() {
-    final String firstName = widget.userName.trim().isNotEmpty
-        ? widget.userName.trim().split(RegExp(r'\s+')).first
+    final String firstName = _currentName.trim().isNotEmpty
+        ? _currentName.trim().split(RegExp(r'\s+')).first
         : 'U';
     return Container(
       width: 42,
@@ -320,6 +337,13 @@ class _ClinicDashboardState extends State<ClinicDashboard> {
   }
 
   Widget _buildUserFooter() {
+    return ValueListenableBuilder<String>(
+      valueListenable: ProfileState.displayName,
+      builder: (_, __, ___) => _userFooterBody(),
+    );
+  }
+
+  Widget _userFooterBody() {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Container(
@@ -436,12 +460,20 @@ class _ClinicDashboardState extends State<ClinicDashboard> {
     if (!confirmed || !mounted) return;
 
     resetTabHistory();
+        ProfileState.clear();
+    DataTracker.invalidateAll();
     Navigator.pushReplacement(
         context, MaterialPageRoute(builder: (context) => const LoginScreen()));
   }
 
+  static const TextStyle _menuTextStyle = TextStyle(
+    color: Color(0xFF334155),
+    fontWeight: FontWeight.w500,
+    fontSize: 16,
+  );
+
   Widget _menuItem(int index, String title, IconData icon) {
-    bool isSelected = _selectedIndex == index;
+    final bool isSelected = _selectedIndex == index;
     return Container(
       margin: const EdgeInsets.only(bottom: 4),
       child: ListTile(
@@ -452,16 +484,9 @@ class _ClinicDashboardState extends State<ClinicDashboard> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         tileColor: isSelected ? const Color(0xFFCCFBF1) : Colors.transparent,
         hoverColor: const Color(0xFFF0FDFA),
-        selected: isSelected,
         leading: Icon(icon,
             color: isSelected ? AppColors.primary : AppColors.textSub),
-        title: Text(title,
-            style: TextStyle(
-              color:
-                  isSelected ? AppColors.primaryDark : const Color(0xFF334155),
-              fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
-              fontSize: 16,
-            )),
+        title: Text(title, style: _menuTextStyle),
       ),
     );
   }

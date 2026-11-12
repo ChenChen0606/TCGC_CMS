@@ -197,12 +197,19 @@ class VisitService {
   // Booklet records (fast path)
   // ---------------------------------------------------------------------
 
-  static Map<String, String>? _namesCache;
+   static Map<String, String>? _namesCache;
   static DateTime? _namesAt;
+  static bool _namesHooked = false;
 
-  /// User names change rarely, so they are cached for a few minutes instead
-  /// of being downloaded on every reload.
   static Future<Map<String, String>> _userNames() async {
+    if (!_namesHooked) {
+      _namesHooked = true;
+      // A saved profile / any data change drops the remembered names.
+      DataTracker.onInvalidate(() {
+        _namesCache = null;
+        _namesAt = null;
+      });
+    }
     final cached = _namesCache;
     final at = _namesAt;
     if (cached != null &&
@@ -226,21 +233,48 @@ class VisitService {
   /// (this replaces the separate scan of clinic_visit_services) and paged so
   /// Supabase's 1000-row cap does not cut the list short.
   static Future<List<Map<String, dynamic>>> _fetchAllVisitRows() async {
-    final all = <Map<String, dynamic>>[];
-    for (var from = 0;; from += _pageSize) {
+    const parallelPages = 4;
+
+    Future<List<Map<String, dynamic>>> readPage(int index) async {
       final rows = await supabaseClient
           .from('clinic_visits')
           .select('*, clinic_visit_services!left(completed_at)')
           .order('created_at', ascending: false)
           .order('visit_id')
-          .range(from, from + _pageSize - 1);
-      all.addAll(rows.map((r) => Map<String, dynamic>.from(r)));
-      if (rows.length < _pageSize) break;
+          .range(index * _pageSize, (index + 1) * _pageSize - 1);
+      return rows.map((r) => Map<String, dynamic>.from(r)).toList();
+    }
+
+    final all = <Map<String, dynamic>>[];
+    final first = await readPage(0);
+    all.addAll(first);
+    var more = first.length >= _pageSize;
+    var next = 1;
+    while (more) {
+      final batch = await Future.wait([
+        for (var i = 0; i < parallelPages; i++) readPage(next + i),
+      ]);
+      for (final page in batch) {
+        all.addAll(page);
+        if (page.length < _pageSize) more = false;
+      }
+      next += parallelPages;
     }
     return all;
   }
 
-  static Future<List<Map<String, String>>> fetchAllBookletRecords() async {
+  static final TtlCache<List<Map<String, String>>> _bookletCache =
+      TtlCache<List<Map<String, String>>>(ttl: const Duration(minutes: 2));
+
+  /// Instant read (no network) of the booklet rows loaded earlier.
+  static List<Map<String, String>>? peekBookletRecords() =>
+      _bookletCache.peek;
+
+  static Future<List<Map<String, String>>> fetchAllBookletRecords(
+          {bool force = false}) =>
+      _bookletCache.get(_downloadBookletRecords, force: force);
+
+  static Future<List<Map<String, String>>> _downloadBookletRecords() async {
     final namesF = _userNames();
     final rowsF = _fetchAllVisitRows();
     final userNames = await namesF;

@@ -5,6 +5,8 @@ import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:clinicmanagementsystem/features/account/services/account_service.dart';
 import 'package:clinicmanagementsystem/core/theme/app_colors.dart';
+import 'package:clinicmanagementsystem/core/services/profile_state.dart';
+import 'package:clinicmanagementsystem/core/services/data_tracker.dart';
 
 class AccountScreen extends StatefulWidget {
   final String userRole;

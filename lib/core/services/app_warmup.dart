@@ -32,6 +32,8 @@ class AppWarmup {
         academicPeriodId: activeId,
         excludeStudents: true));
     _quiet(IndividualRecordService.fetchUserNames());
+    _quiet(VisitService.fetchAllBookletRecords());
+    _quiet(IndividualRecordService.fetchAllOnePerPerson());
   }
 
   static void _quiet(Future<Object?> f) {
