@@ -155,15 +155,32 @@ class _IndividualRecordScreenState extends State<IndividualRecordScreen>
     _busy = true;
 
     if (mounted && !silent) {
+      // If this list was already downloaded (at sign-in or on an earlier
+      // visit) show it right away and refresh quietly behind it; only show
+      // the loading state when there is nothing to show yet.
+      final early = _rosterFromMemory(
+          includeInactiveOverride: includeInactiveOverride,
+          academicPeriodIdOverride: academicPeriodIdOverride);
       setState(() {
-        _loading = true;
+        if (early != null) {
+          _userNames = IndividualRecordService.peekUserNames() ?? _userNames;
+          _records
+            ..clear()
+            ..addAll(early);
+          _loading = false;
+        } else {
+          _loading = true;
+        }
         _loadError = null;
       });
     }
     try {
       if (!silent) {
         try {
-          await ReferenceCatalog.refreshPeriods();
+          // The periods rarely change; skip the extra round trip when they
+          // were read a moment ago.
+          await ReferenceCatalog.refreshPeriods(
+              maxAge: const Duration(minutes: 1));
         } catch (_) {}
       }
 
@@ -211,6 +228,32 @@ class _IndividualRecordScreenState extends State<IndividualRecordScreen>
     } finally {
       _busy = false;
     }
+  }
+
+  /// The list [_loadRecords] would build, taken from what is already in
+  /// memory (no network). Null when any part of it has not been loaded yet.
+  List<IndividualRecord>? _rosterFromMemory({
+    bool? includeInactiveOverride,
+    String? academicPeriodIdOverride,
+  }) {
+    final showAllTerms = includeInactiveOverride ?? _showInactive;
+    final activeId = ReferenceCatalog.activePeriod?.id;
+    final studentPeriodId = showAllTerms
+        ? null
+        : (academicPeriodIdOverride ?? _filterAcademicPeriodId ?? activeId);
+
+    final students = IndividualRecordService.peekAll(
+        includeInactive: true, academicPeriodId: studentPeriodId);
+    final others = IndividualRecordService.peekAll(
+        includeInactive: false,
+        academicPeriodId: activeId,
+        excludeStudents: true);
+    if (students == null || others == null) return null;
+
+    return [
+      ...students.where((r) => r.category == 'Student'),
+      ...others.where((r) => r.category != 'Student'),
+    ].where((r) => r.status != kRecordStatusArchived).toList();
   }
 
   void _onSearchChanged(String _) {

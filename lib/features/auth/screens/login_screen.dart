@@ -6,6 +6,7 @@ import 'package:clinicmanagementsystem/core/theme/app_colors.dart';
 import 'package:clinicmanagementsystem/core/config/supabase_config.dart';
 import 'package:clinicmanagementsystem/features/account/services/account_service.dart';
 import 'package:clinicmanagementsystem/core/services/reference_data_service.dart';
+import 'package:clinicmanagementsystem/core/services/app_warmup.dart';
 import 'package:clinicmanagementsystem/core/platform/browser_tabs.dart';
 import 'package:clinicmanagementsystem/features/auth/recovery_state.dart';
 import 'package:clinicmanagementsystem/features/auth/widgets/forgot_password_dialog.dart';
@@ -159,6 +160,10 @@ void dispose() {
     }
 
     await ReferenceCatalog.loadAfterSignIn();
+
+    // Start downloading the dashboard, Clinic Visit and Individual Record
+    // data now (not awaited) so those screens open without a loading wait.
+    AppWarmup.start();
 
     final profile = accountRow != null
         ? AppProfile.fromSupabase(accountRow)

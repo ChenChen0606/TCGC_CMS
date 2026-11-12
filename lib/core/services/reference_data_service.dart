@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:clinicmanagementsystem/core/services/data_tracker.dart';
 import 'package:clinicmanagementsystem/core/config/supabase_config.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' show PostgrestException;
@@ -284,9 +286,46 @@ class ReferenceCatalog {
     }
   }
 
-  static Future<void> load({bool force = false}) async {
-    if (_loaded && !force && hasCoreData) return;
+  static Future<void>? _loadInflight;
+  static int _loadToken = 0;
+  static DateTime? _periodsAt;
 
+  /// Completes when a catalog load that is already running has finished
+  /// (immediately if none is running). It never starts a load of its own, so
+  /// it cannot repeat a load that keeps failing.
+  static Future<void> whenSettled() async {
+    final running = _loadInflight;
+    if (running == null) return;
+    try {
+      await running;
+    } catch (_) {}
+  }
+
+  /// Several places ask for the catalog at the same moment right after
+  /// sign-in (the auth listener, the login screen, each screen's initState).
+  /// They now share ONE request instead of each running the five queries.
+  /// `force: true` always starts a new request.
+  static Future<void> load({bool force = false}) {
+    if (_loaded && !force && hasCoreData) return Future<void>.value();
+    final running = _loadInflight;
+    if (running != null && !force) return running;
+    final token = ++_loadToken;
+    final f = _loadNow(token);
+    _loadInflight = f;
+    return f;
+  }
+
+  static Future<void> _loadNow(int token) async {
+    try {
+      await _loadBody();
+    } finally {
+      scheduleMicrotask(() {
+        if (token == _loadToken) _loadInflight = null;
+      });
+    }
+  }
+
+  static Future<void> _loadBody() async {
     if (!hasSignedInUser) {
       _lastError = 'Not signed in yet.';
       return;
@@ -307,6 +346,7 @@ class ReferenceCatalog {
           .map(AcademicPeriodOption.fromSupabase)
           .where((p) => p.id.isNotEmpty)
           .toList();
+      _periodsAt = DateTime.now();
     }
     if (r[1] != null) {
       _institutes = r[1]!
@@ -374,7 +414,9 @@ class ReferenceCatalog {
   static Future<void> loadAfterSignIn() async {
     if ((_loaded && hasCoreData) || !hasSignedInUser) return;
     try {
-      await load(force: true);
+      // Joins a load that is already running (the auth listener starts one
+      // the moment the session exists) instead of repeating the queries.
+      await load();
     } catch (_) {
       return;
     }
@@ -388,14 +430,25 @@ class ReferenceCatalog {
     DataTracker.bump();
   }
 
-  static Future<void> refreshPeriods() async {
+  /// Re-reads the academic periods. With [maxAge], does nothing when they
+  /// were read more recently than that (saves a network round trip each time
+  /// a screen opens).
+  static Future<void> refreshPeriods({Duration? maxAge}) async {
     if (!hasSignedInUser) return;
+    final at = _periodsAt;
+    if (maxAge != null &&
+        at != null &&
+        _periods.isNotEmpty &&
+        DateTime.now().difference(at) < maxAge) {
+      return;
+    }
     final rows = await supabaseClient.from('academic_periods').select();
     _periods = (rows as List)
         .map((r) => AcademicPeriodOption.fromSupabase(
             Map<String, dynamic>.from(r as Map)))
         .where((p) => p.id.isNotEmpty)
         .toList();
+    _periodsAt = DateTime.now();
   }
 
   static final List<void Function()> _listeners = [];

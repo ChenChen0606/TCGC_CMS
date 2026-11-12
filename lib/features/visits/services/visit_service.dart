@@ -1,6 +1,7 @@
 import 'package:intl/intl.dart';
 import 'package:clinicmanagementsystem/core/services/data_tracker.dart';
 import 'package:clinicmanagementsystem/core/services/time_service.dart';
+import 'package:clinicmanagementsystem/core/services/ttl_cache.dart';
 import 'package:clinicmanagementsystem/features/patients/services/patient_service.dart';
 import 'package:clinicmanagementsystem/core/config/supabase_config.dart';
 import 'package:clinicmanagementsystem/core/services/reference_data_service.dart';
@@ -396,7 +397,25 @@ class VisitService {
   static DateTime _minute(DateTime t) =>
       DateTime(t.year, t.month, t.day, t.hour, t.minute);
 
-  static Future<List<DashboardVisit>> fetchDashboardVisits() async {
+  static final TtlCache<List<DashboardVisit>> _dashboardCache =
+      TtlCache<List<DashboardVisit>>(ttl: const Duration(seconds: 30));
+
+  /// Instant read (no network) of the dashboard visits loaded earlier, or
+  /// null when there are none. Cleared by any save/edit/delete.
+  static List<DashboardVisit>? peekDashboardVisits() => _dashboardCache.peek;
+
+  static Future<List<DashboardVisit>> fetchDashboardVisits(
+          {bool force = false}) =>
+      _dashboardCache.get(_downloadDashboardVisits, force: force);
+
+  static Future<List<DashboardVisit>> _downloadDashboardVisits() async {
+    // The dashboard only shows TODAY's visits, so only recent ones are asked
+    // for. Downloading every visit ever recorded (each with its person,
+    // enrolment, institute, program and services) made this screen slower
+    // every week. One extra day back covers a visit saved around midnight or
+    // a device clock / time-zone difference.
+    final since = DateFormat('yyyy-MM-dd')
+        .format(DateTime.now().subtract(const Duration(days: 1)));
     final rows = await supabaseClient.from('clinic_visits').select('''
       visit_id, person_id, visit_date, visit_time, reason_for_visit, created_at,
       individual_records!left(
@@ -410,7 +429,7 @@ class VisitService {
       clinic_visit_services!left(
         service_types!left(service_name, service_code)
       )
-    ''').order('created_at', ascending: false);
+    ''').gte('visit_date', since).order('created_at', ascending: false);
 
     return rows.map<DashboardVisit>((raw) {
       final row = Map<String, dynamic>.from(raw);

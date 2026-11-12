@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:clinicmanagementsystem/features/auth/recovery_state.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -6,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:clinicmanagementsystem/core/theme/app_colors.dart';
 import 'package:clinicmanagementsystem/core/config/supabase_config.dart';
 import 'package:clinicmanagementsystem/core/services/reference_data_service.dart';
+import 'package:clinicmanagementsystem/core/services/data_tracker.dart';
 import 'package:clinicmanagementsystem/core/platform/browser_tabs.dart';
 
 Future<void> main() async {
@@ -91,14 +94,20 @@ Future<void> main() async {
     statusBarIconBrightness: Brightness.dark,
   ));
 
-  await ReferenceCatalog.loadQuietly();
-
   supabaseClient.auth.onAuthStateChange.listen((event) {
     if (event.session == null) {
+      // Signed out: forget every cached list so the next user never sees
+      // the previous user's data.
+      DataTracker.invalidateAll();
       return;
     }
     ReferenceCatalog.loadAfterSignIn();
   });
+
+  // Started before the first frame but NOT awaited: the app window opens
+  // right away instead of staying blank until these tables are downloaded.
+  // Screens wait for it themselves where they need it.
+  unawaited(ReferenceCatalog.loadQuietly());
 
   runApp(const TCGCClinicApp());
 

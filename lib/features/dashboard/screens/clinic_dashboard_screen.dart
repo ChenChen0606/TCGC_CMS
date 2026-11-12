@@ -500,6 +500,10 @@ class _DashboardOverviewState extends State<DashboardOverview> {
 
   VoidCallback? _dataListener;
 
+  /// Data changed (a save, edit, delete) while this tab was hidden: reload
+  /// when it is shown again instead of reloading in the background.
+  bool _dirty = false;
+
   @override
   void initState() {
     super.initState();
@@ -507,8 +511,18 @@ class _DashboardOverviewState extends State<DashboardOverview> {
     _dateString = DateFormat('EEEE, MMMM d, y').format(DateTime.now());
     _timer =
         Timer.periodic(const Duration(seconds: 1), (Timer t) => _updateTime());
+    // Show what was loaded at sign-in straight away; the refresh below then
+    // updates it quietly, so there is no empty / loading screen.
+    final cached = VisitService.peekDashboardVisits();
+    if (cached != null) _visits = cached;
     _loadData();
-    _dataListener = () => _loadData();
+    _dataListener = () {
+      if (widget.isActive) {
+        _loadData(dataChanged: true);
+      } else {
+        _dirty = true;
+      }
+    };
     DataTracker.listen(_dataListener!);
   }
 
@@ -517,17 +531,29 @@ class _DashboardOverviewState extends State<DashboardOverview> {
     super.didUpdateWidget(oldWidget);
 
     if (widget.isActive && !oldWidget.isActive) {
-      _loadData();
+      final changed = _dirty;
+      _dirty = false;
+      _loadData(dataChanged: changed);
     }
   }
 
-  Future<void> _loadData() async {
-    setState(() => _error = null);
+  Future<void> _loadData({bool dataChanged = false}) async {
+    if (mounted && _error != null) setState(() => _error = null);
+
+    // Both requests start together instead of one after the other. The
+    // visits come from a short-lived cache, so coming back to this tab does
+    // not download them again every time.
+    final visitsF = VisitService.fetchDashboardVisits();
+    final medsF = MedicineService.fetchAll();
+    unawaited(visitsF.then((_) {}, onError: (_) {}));
+    unawaited(medsF.then((_) {}, onError: (_) {}));
+
     try {
-      final visits = await VisitService.fetchDashboardVisits();
+      final visits = await visitsF;
       if (mounted) {
-        // Re-read the details too, so an edited visit shows its new name.
-        _detailsRequested.clear();
+        // Only after a real data change: re-read the details too, so an
+        // edited visit shows its new name.
+        if (dataChanged) _detailsRequested.clear();
         setState(() => _visits = visits);
       }
     } catch (e) {
@@ -535,7 +561,7 @@ class _DashboardOverviewState extends State<DashboardOverview> {
     }
 
     try {
-      final meds = await MedicineService.fetchAll();
+      final meds = await medsF;
       if (!mounted) return;
       setState(() {
         _outOfStockCount = meds.where((m) => m.isOutOfStock).length;

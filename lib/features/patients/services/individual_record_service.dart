@@ -4,6 +4,7 @@ import 'package:clinicmanagementsystem/features/patients/models/individual_recor
 import 'package:clinicmanagementsystem/features/account/services/account_service.dart';
 import 'package:clinicmanagementsystem/core/services/data_tracker.dart';
 import 'package:clinicmanagementsystem/core/services/reference_data_service.dart';
+import 'package:clinicmanagementsystem/core/services/ttl_cache.dart';
 import 'package:clinicmanagementsystem/core/config/supabase_config.dart';
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' show PostgrestException;
@@ -72,43 +73,101 @@ $_enrolmentSelect,
     created_at,
     created_by''';
 
-   static Future<List<IndividualRecord>> fetchAll({
+  // ---------------------------------------------------------------------
+  // Roster cache
+  //
+  // The same roster is asked for by the Individual Record screen and the
+  // Clinic Visit screen (on open, on every tab switch, after every save).
+  // Results are kept in memory for a short time, requests made at the same
+  // moment share one download, and any save/edit/delete clears them
+  // (DataTracker.bump), so a screen can paint instantly and never shows a
+  // roster that is known to be out of date.
+  // ---------------------------------------------------------------------
+
+  static final Map<String, TtlCache<List<IndividualRecord>>> _rosterCaches = {};
+
+  static TtlCache<List<IndividualRecord>> _rosterCache(String key) =>
+      _rosterCaches.putIfAbsent(
+        key,
+        () => TtlCache<List<IndividualRecord>>(
+            ttl: const Duration(seconds: 90)),
+      );
+
+  static String _rosterKey(String category, bool includeInactive,
+          String period, bool excludeStudents) =>
+      '$category|$includeInactive|$period|$excludeStudents';
+
+  /// The academic period a roster query is about. Empty means "every period"
+  /// when [includeInactive] is true, and "no active period known" otherwise.
+  static String _effectivePeriod(bool includeInactive, String? academicPeriodId) {
+    final periodId = academicPeriodId?.trim() ?? '';
+    if (!includeInactive && periodId.isEmpty) {
+      return ReferenceCatalog.activePeriod?.id ?? '';
+    }
+    return periodId;
+  }
+
+  /// Instant read (no network) of a roster that was loaded earlier, or null
+  /// when there is none. Takes the same arguments as [fetchAll].
+  static List<IndividualRecord>? peekAll({
+    String? category,
+    bool includeInactive = false,
+    String? academicPeriodId,
+    bool excludeStudents = false,
+  }) {
+    final effective = _effectivePeriod(includeInactive, academicPeriodId);
+    if (!includeInactive && effective.isEmpty) return null;
+    final hit = _rosterCaches[_rosterKey(
+            category?.trim() ?? '', includeInactive, effective, excludeStudents)]
+        ?.peek;
+    return hit == null ? null : List<IndividualRecord>.of(hit);
+  }
+
+  static Future<List<IndividualRecord>> fetchAll({
     String? category,
     String? search,
     bool includeInactive = false,
     String? academicPeriodId,
     bool excludeStudents = false,
+    bool force = false,
   }) async {
     final cat = category?.trim() ?? '';
     final needle = (search ?? '').trim();
 
-    final periodId = academicPeriodId?.trim() ?? '';
-    var effectivePeriod = periodId;
+    // Right after sign-in the reference catalog may still be loading; the
+    // active period is needed to know which roster to ask for.
+    await ReferenceCatalog.whenSettled();
+
+    final effectivePeriod = _effectivePeriod(includeInactive, academicPeriodId);
     if (!includeInactive && effectivePeriod.isEmpty) {
-      effectivePeriod = ReferenceCatalog.activePeriod?.id ?? '';
-      if (effectivePeriod.isEmpty) {
-        return const [];
-      }
+      return const [];
     }
 
-    var q = supabaseClient.from(_enrolments).select(excludeStudents
-        ? _rosterSelect.replaceFirst('person:individual_records!left(',
-            'person:individual_records!inner(')
-        : _rosterSelect);
-    if (excludeStudents) {
-      q = q.neq('person.person_type', personTypeForStorage('Student'));
-    }
+    Future<List<IndividualRecord>> download() => _downloadRoster(
+          cat: cat,
+          needle: needle,
+          includeInactive: includeInactive,
+          effectivePeriod: effectivePeriod,
+          excludeStudents: excludeStudents,
+        );
 
-    if (!includeInactive) q = q.eq('status', kRecordStatusActive);
+    // A search term makes every request different, so searches are not kept.
+    if (needle.isNotEmpty) return download();
 
-    if (effectivePeriod.isNotEmpty) {
-      q = q.eq('academic_period_id', effectivePeriod);
-    }
+    final cache = _rosterCache(
+        _rosterKey(cat, includeInactive, effectivePeriod, excludeStudents));
+    final list = await cache.get(download, force: force);
+    return List<IndividualRecord>.of(list);
+  }
 
-    if (cat.isNotEmpty) {
-      q = q.eq('person.person_type', personTypeForStorage(cat));
-    }
-
+  static Future<List<IndividualRecord>> _downloadRoster({
+    required String cat,
+    required String needle,
+    required bool includeInactive,
+    required String effectivePeriod,
+    required bool excludeStudents,
+  }) async {
+    String? orFilter;
     if (needle.isNotEmpty) {
       final safe = _filterSafe(needle);
       if (safe.isNotEmpty) {
@@ -133,25 +192,68 @@ $_enrolmentSelect,
         ];
         if (ids.isEmpty) return const [];
 
-        q = q.or([
+        orFilter = [
           'year_level.ilike.$like',
           'person_id.in.(${ids.map(_inFilterSafe).join(',')})',
-        ].join(','));
+        ].join(',');
       }
     }
 
-      // Supabase returns at most 1000 rows per request, so read page by page.
-    final rows = <dynamic>[];
-    const pageSize = 1000;
-    var from = 0;
-    while (true) {
-      final page = await q
-          .order('academic_record_id', ascending: true)
-          .range(from, from + pageSize - 1);
-      rows.addAll(page);
-      if (page.length < pageSize) break;
-      from += pageSize;
+    // A fresh query for every page: pages are requested at the same time, and
+    // one query object must not be shared between requests.
+    dynamic build() {
+      var q = supabaseClient.from(_enrolments).select(excludeStudents
+          ? _rosterSelect.replaceFirst('person:individual_records!left(',
+              'person:individual_records!inner(')
+          : _rosterSelect);
+      if (excludeStudents) {
+        q = q.neq('person.person_type', personTypeForStorage('Student'));
+      }
+
+      if (!includeInactive) q = q.eq('status', kRecordStatusActive);
+
+      if (effectivePeriod.isNotEmpty) {
+        q = q.eq('academic_period_id', effectivePeriod);
+      }
+
+      if (cat.isNotEmpty) {
+        q = q.eq('person.person_type', personTypeForStorage(cat));
+      }
+
+      if (orFilter != null) q = q.or(orFilter);
+      return q;
     }
+
+    // Supabase returns at most 1000 rows per request, so read page by page.
+    // The first page is asked for alone (most rosters fit in it); if it is
+    // full, the following pages are downloaded several at a time instead of
+    // one after another.
+    const pageSize = 1000;
+    const parallelPages = 4;
+
+    Future<List<dynamic>> readPage(int index) async {
+      final res = await build()
+          .order('academic_record_id', ascending: true)
+          .range(index * pageSize, (index + 1) * pageSize - 1);
+      return res as List<dynamic>;
+    }
+
+    final rows = <dynamic>[];
+    final first = await readPage(0);
+    rows.addAll(first);
+    var more = first.length >= pageSize;
+    var next = 1;
+    while (more) {
+      final batch = await Future.wait([
+        for (var i = 0; i < parallelPages; i++) readPage(next + i),
+      ]);
+      for (final page in batch) {
+        rows.addAll(page);
+        if (page.length < pageSize) more = false;
+      }
+      next += parallelPages;
+    }
+
     return _dedupe(rows
         .map<IndividualRecord>(
             (r) => IndividualRecord.fromSupabase(Map<String, dynamic>.from(r)))
@@ -700,15 +802,24 @@ $_enrolmentSelect,
     DataTracker.bump();
   }
 
+  static final TtlCache<Map<String, String>> _userNamesCache =
+      TtlCache<Map<String, String>>(ttl: const Duration(minutes: 10));
+
+  /// Names of the app users (for "created by"). They change rarely, so they
+  /// are kept for a few minutes instead of being downloaded on every reload.
+  static Map<String, String>? peekUserNames() => _userNamesCache.peek;
+
   static Future<Map<String, String>> fetchUserNames() async {
     try {
-      final rows = await supabaseClient
-          .from('useraccount')
-          .select('user_id, username, fn, ln');
-      return {
-        for (final r in rows)
-          if (r['user_id'] != null) r['user_id'] as String: _nameOf(r),
-      };
+      return await _userNamesCache.get(() async {
+        final rows = await supabaseClient
+            .from('useraccount')
+            .select('user_id, username, fn, ln');
+        return <String, String>{
+          for (final r in rows)
+            if (r['user_id'] != null) r['user_id'] as String: _nameOf(r),
+        };
+      });
     } catch (_) {
       return const {};
     }

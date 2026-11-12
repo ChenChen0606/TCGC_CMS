@@ -176,7 +176,13 @@ class _ClinicVisitScreenState extends State<ClinicVisitScreen> {
 
     ReferenceCatalog.subscribe(_catalogListener);
 
-    _dataListener = _loadDirectory;
+    // Only reload the roster for a data change while this tab is showing.
+    // When it is hidden, didUpdateWidget reloads it as soon as the tab is
+    // opened again, so a hidden tab no longer downloads the roster in the
+    // background after every save made on another tab.
+    _dataListener = () {
+      if (widget.isActive) _loadDirectory();
+    };
     DataTracker.listen(_dataListener!);
   }
 
