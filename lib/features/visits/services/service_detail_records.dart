@@ -485,10 +485,12 @@ Map<String, dynamic>? buildServiceRecord({
       final vsResp = vsOn('Respiratory Rate') ? vitals.respRate : null;
       final vsSpo2 = vsOn('O₂ Saturation') ? vitals.o2Sat : null;
 
-      final vsBp = VitalClassifier.classifyBp(vsSys, vsDia);
+      final vsAge = vitals.ageYears;
+      final vsBp = VitalClassifier.classifyBp(vsSys, vsDia,
+          ageYears: vsAge, sex: vitals.sex);
       final vsTempClass = VitalClassifier.classifyTemp(vsTemp);
-      final vsPulseClass = VitalClassifier.classifyPulse(vsPulse);
-      final vsRespClass = VitalClassifier.classifyResp(vsResp);
+      final vsPulseClass = VitalClassifier.classifyPulse(vsPulse, ageYears: vsAge);
+      final vsRespClass = VitalClassifier.classifyResp(vsResp, ageYears: vsAge);
       final vsSpo2Class = VitalClassifier.classifySpo2(vsSpo2);
       final vsAnyVital = vsSys != null ||
           vsDia != null ||

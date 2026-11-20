@@ -730,19 +730,29 @@ class _ReportsScreenState extends State<ReportsScreen> {
   List<_ReportVisit> _visitsInRange() => _visits.where(_inPeriod).toList();
 
   Map<String, double> get _currentViewData {
-    final list = _visitsInRange();
-    double count(String type) =>
-        list.where((v) => v.personType == type).length.toDouble();
-    final students = count('Student');
-    final faculty = count('Faculty');
-    final staff = count('Staff');
-    return {
-      'Students': students,
-      'Faculty': faculty,
-      'Staff': staff,
-      'Total': students + faculty + staff,
-    };
+  final list = _visitsInRange();
+
+  // Each person counts once per day (AM + PM visit = 1 person).
+  double people(String type) {
+    final seen = <String>{};
+    for (final v in list) {
+      if (v.personType != type) continue;
+      final d = v.visitDate;
+      final day = d == null ? '' : '${d.year}-${d.month}-${d.day}';
+      final who =
+          v.personId.trim().isNotEmpty ? v.personId.trim() : v.displayName;
+      seen.add('$who|$day');
+    }
+    return seen.length.toDouble();
   }
+
+  return {
+    'Students': people('Student'),
+    'Faculty': people('Faculty'),
+    'Staff': people('Staff'),
+    'Total': list.length.toDouble(), // every visit
+  };
+}
 
   List<MapEntry<String, int>> _topReasons({int limit = 5}) {
     final counts = <String, int>{};

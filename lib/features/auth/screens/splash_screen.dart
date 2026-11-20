@@ -2,7 +2,12 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:clinicmanagementsystem/features/auth/screens/login_screen.dart';
 import 'package:clinicmanagementsystem/features/auth/screens/reset_password_screen.dart';
+import 'package:clinicmanagementsystem/features/auth/screens/force_password_change_screen.dart';
 import 'package:clinicmanagementsystem/features/auth/recovery_state.dart';
+import 'package:clinicmanagementsystem/features/dashboard/screens/clinic_dashboard_screen.dart';
+import 'package:clinicmanagementsystem/features/account/services/account_service.dart';
+import 'package:clinicmanagementsystem/core/services/reference_data_service.dart';
+import 'package:clinicmanagementsystem/core/services/app_warmup.dart';
 import 'package:clinicmanagementsystem/core/config/supabase_config.dart';
 import 'package:clinicmanagementsystem/core/theme/app_colors.dart';
 
@@ -18,6 +23,81 @@ class _SplashScreenState extends State<SplashScreen> {
   void initState() {
     super.initState();
     _route();
+  }
+
+  /// Builds the screen for a user who is already signed in (after a page
+  /// refresh). Same data as the login screen uses. Returns null when
+  /// anything is wrong, and the app then goes to the login page.
+  Future<Widget?> _signedInScreen() async {
+    try {
+      final authUser = supabaseClient.auth.currentUser;
+      if (authUser == null) return null;
+
+      Map<String, dynamic>? accountRow;
+      try {
+        accountRow = await supabaseClient
+            .from('useraccount')
+            .select()
+            .eq('user_id', authUser.id)
+            .maybeSingle();
+      } catch (e) {
+        debugPrint('SPLASH: useraccount fetch failed: $e');
+      }
+
+      bool isActive;
+      if (accountRow != null && accountRow['is_active'] is bool) {
+        isActive = accountRow['is_active'] as bool;
+      } else {
+        final raw = AccountService.metadataOf(authUser)['is_active'];
+        if (raw is bool) {
+          isActive = raw;
+        } else if (raw is String) {
+          isActive = raw.toLowerCase() != 'false';
+        } else {
+          isActive = true;
+        }
+      }
+
+      if (!isActive) {
+        await supabaseClient.auth.signOut();
+        return null;
+      }
+
+      await ReferenceCatalog.loadAfterSignIn();
+      AppWarmup.start();
+
+      final profile = accountRow != null
+          ? AppProfile.fromSupabase(accountRow)
+              .withNamesFrom(AccountService.profileFromAuthUser(authUser))
+          : AccountService.profileFromAuthUser(authUser);
+
+      final role = profile.role;
+      final userEmail = authUser.email ?? '';
+      final userUsername = profile.username.isNotEmpty
+          ? profile.username
+          : AccountService.usernameFromAuthEmail(authUser.email);
+      final userName =
+          profile.displayName.isNotEmpty ? profile.displayName : userUsername;
+
+      if (profile.mustChangePassword) {
+        return ForcePasswordChangeScreen(
+          userRole: role,
+          userEmail: userEmail,
+          userName: userName,
+          userUsername: userUsername,
+        );
+      }
+
+      return ClinicDashboard(
+        userRole: role,
+        userEmail: userEmail,
+        userName: userName,
+        userUsername: userUsername,
+      );
+    } catch (e) {
+      debugPrint('SPLASH: could not restore the session: $e');
+      return null;
+    }
   }
 
   Future<void> _route() async {
@@ -46,8 +126,23 @@ class _SplashScreenState extends State<SplashScreen> {
       // The link did not produce a session. Show an error on the login page.
       RecoveryState.pending.value = false;
       RecoveryState.linkError =
-      'This reset link could not be verified. Please request a new one.'
-      '${RecoveryState.verifyError != null ? '\n(${RecoveryState.verifyError})' : ''}';
+          'This reset link could not be verified. Please request a new one.'
+          '${RecoveryState.verifyError != null ? '\n(${RecoveryState.verifyError})' : ''}';
+    }
+
+    // Already signed in (Supabase restores the session after a refresh):
+    // skip the login page. The dashboard reads the URL (/reports, ...)
+    // and opens that tab.
+    if (supabaseClient.auth.currentSession != null) {
+      final home = await _signedInScreen();
+      if (!mounted) return;
+      if (home != null) {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (_) => home),
+        );
+        return;
+      }
     }
 
     Navigator.pushReplacement(

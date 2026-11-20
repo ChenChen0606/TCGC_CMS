@@ -113,86 +113,116 @@ class _VisitEditScreenState extends State<VisitEditScreen> {
     );
   }
 
-  Future<void> _save() async {
-    if (_saving) return;
-        if (_details.draftFor('bpi') != null) {
-      final why = _details.vitals.bmiBlockReason;
-      if (why != null) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(why),
-          backgroundColor: AppColors.warning,
-          behavior: SnackBarBehavior.floating,
-        ));
-        return;
-      }
-    }
+Future<void> _save() async {
+  // Already saving -> ignore extra taps.
+  if (_saving) return;
 
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Update this record?'),
-        content: const Text(
-          'Update reason and service details. Visit date and time are not '
-          'changed.',
-          style: TextStyle(fontSize: 13.5, height: 1.4),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            key: const ValueKey('confirm_visit_update'),
-            onPressed: () => Navigator.pop(ctx, true),
-            style: TextButton.styleFrom(foregroundColor: AppColors.primary),
-            child: const Text('Update'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true || !mounted) return;
-
-    setState(() => _saving = true);
-    try {
-      final reason = _reasonCtrl.text.trim();
-      if (reason != widget.initialReason.trim()) {
-        await VisitService.update(widget.visitId, complaint: reason);
-      }
-
-      final removed = [
-        for (final id in _originalServiceIds)
-          if (_details.draftFor(id) == null) id,
-      ];
-      if (removed.isNotEmpty) {
-        await VisitDetailsService.removeServices(
-          visitId: widget.visitId,
-          serviceIds: removed,
-        );
-      }
-
-      await VisitDetailsService.saveAll(
-        visitId: widget.visitId,
-        controller: _details,
-        userName: widget.userName,
-      );
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _saving = false);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('Could not save the changes: $e'),
-        backgroundColor: AppColors.danger,
-        behavior: SnackBarBehavior.floating,
-      ));
+  if (_details.draftFor('bpi') != null) {
+    final why = _details.vitals.bmiBlockReason;
+    if (why != null) {
+      _showSnack(why, AppColors.warning);
       return;
     }
+  }
+
+  // Lock the button right away, so a double tap cannot open the dialog twice.
+  setState(() => _saving = true);
+
+  final confirmed = await showDialog<bool>(
+    context: context,
+    barrierDismissible: false,
+    builder: (ctx) => AlertDialog(
+      title: const Text('Update this record?'),
+      content: const Text(
+        'Update reason and service details. Visit date and time are not '
+        'changed.',
+        style: TextStyle(fontSize: 13.5, height: 1.4),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(ctx, false),
+          child: const Text('Cancel'),
+        ),
+        TextButton(
+          key: const ValueKey('confirm_visit_update'),
+          onPressed: () => Navigator.pop(ctx, true),
+          style: TextButton.styleFrom(foregroundColor: AppColors.primary),
+          child: const Text('Update'),
+        ),
+      ],
+    ),
+  );
+
+  // Cancelled -> unlock the button again.
+  if (confirmed != true || !mounted) {
+    if (mounted) setState(() => _saving = false);
+    return;
+  }
+
+  try {
+    final reason = _reasonCtrl.text.trim();
+    if (reason != widget.initialReason.trim()) {
+      await VisitService.update(widget.visitId, complaint: reason);
+    }
+
+    final removed = [
+      for (final id in _originalServiceIds)
+        if (_details.draftFor(id) == null) id,
+    ];
+    if (removed.isNotEmpty) {
+      await VisitDetailsService.removeServices(
+        visitId: widget.visitId,
+        serviceIds: removed,
+      );
+    }
+
+    await VisitDetailsService.saveAll(
+      visitId: widget.visitId,
+      controller: _details,
+      userName: widget.userName,
+    );
+  } catch (e) {
     if (!mounted) return;
+    // Failed -> unlock so it can be tried again, and show why.
     setState(() => _saving = false);
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-     content: const Text('Record updated.'),
-      backgroundColor: AppColors.primary,
-      behavior: SnackBarBehavior.floating,
-    ));
-    Navigator.of(context).pop(true);
+    _showSnack(_saveErrorText(e), AppColors.danger, seconds: 6);
+    return;
+  }
+
+  if (!mounted) return;
+  setState(() => _saving = false);
+  _showSnack('Record updated.', AppColors.primary);
+  Navigator.of(context).pop(true);
+}
+
+  void _showSnack(String message, Color color, {int seconds = 2}) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+        content: Text(message),
+        backgroundColor: color,
+        behavior: SnackBarBehavior.floating,
+        duration: Duration(seconds: seconds),
+      ));
+  }
+
+  /// Turns a save failure into a message a clinic worker can act on.
+  String _saveErrorText(Object e) {
+    final t = e.toString().toLowerCase();
+    final offline = t.contains('socketexception') ||
+        t.contains('failed host lookup') ||
+        t.contains('clientexception') ||
+        t.contains('xmlhttprequest') ||
+        t.contains('failed to fetch') ||
+        t.contains('network') ||
+        t.contains('connection') ||
+        t.contains('timeout') ||
+        t.contains('timed out');
+    if (offline) {
+      return 'Could not save the changes: no internet connection. '
+          'Check your WiFi or data, then tap Save changes again.';
+    }
+    return 'Could not save the changes: $e';
   }
 
   @override

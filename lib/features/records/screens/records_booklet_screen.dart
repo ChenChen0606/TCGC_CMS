@@ -674,17 +674,16 @@ class RecordsBookletState extends State<RecordsBooklet> {
     }
   }
 
-  Map<String, int> _getVisitSummary() {
-    final all = _groupsFor(null);
-    int c(String t) => all.where((g) => g.first["type"] == t).length;
-    return {
-      "all": all.length,
-      "student": c("Student"),
-      "faculty": c("Faculty"),
-      "staff": c("Staff"),
-    };
-  }
-
+ Map<String, int> _getVisitSummary() {
+  final all = _groupsFor(null); // one group = one person on one day
+  int people(String t) => all.where((g) => g.first["type"] == t).length;
+  return {
+    "all": all.fold<int>(0, (s, g) => s + g.length), // every visit
+    "student": people("Student"),
+    "faculty": people("Faculty"),
+    "staff": people("Staff"),
+  };
+}
   List<_DayGroup> _groupByDay(List<Map<String, String>> records) {
     final map = <String, _DayGroup>{};
     for (final r in records) {
@@ -2711,7 +2710,7 @@ class RecordsBookletState extends State<RecordsBooklet> {
       spacing: 8,
       runSpacing: 8,
       children: [
-        _summaryChip('All', summary['all']!, kPrimary, Icons.groups_rounded),
+       _summaryChip('Total Visits', summary['all']!, kPrimary, Icons.groups_rounded),
         _summaryChip('Students', summary['student']!, kStudentColor,
             Icons.school_outlined),
         _summaryChip('Faculty', summary['faculty']!, kFacultyColor,

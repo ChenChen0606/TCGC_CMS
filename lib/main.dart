@@ -13,7 +13,8 @@ import 'package:clinicmanagementsystem/core/platform/browser_tabs.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-
+  WidgetsFlutterBinding.ensureInitialized();
+  configureUrlStrategy(); // /reports instead of /#reports
   // Capture the URL before anything can rewrite it.
   final launchUri = Uri.base;
   debugPrint('MAIN launch uri: $launchUri');

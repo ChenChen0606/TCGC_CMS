@@ -141,6 +141,12 @@ class _ClinicVisitScreenState extends State<ClinicVisitScreen> {
 
   bool _hydrating = false;
   bool _saving = false;
+    /// Shown as a red banner inside the step when the last save failed.
+  String? _saveError;
+
+  /// Visit row already created by a save that failed afterwards. Complete
+  /// retries with THIS visit instead of creating a duplicate.
+  String? _pendingVisitId;
 
   VisitDetailsController? _details;
 
@@ -432,6 +438,8 @@ bool _matchesTokens(ClinicProfile p, List<String> tokens) {
         _checkedInAt = _serverNow();
         _timeInEdited = false;
         _timeOutAt = null;
+        _pendingVisitId = null;
+        _saveError = null;
       }
     });
   }
@@ -465,7 +473,10 @@ bool _matchesTokens(ClinicProfile p, List<String> tokens) {
         (t.isNotEmpty && _keywordTriggersProcedure(t));
   }
 
-    Future<void> _completeConsultation() async {
+  Future<void> _completeConsultation() async {
+    // Already saving -> ignore any extra taps (no duplicate saves).
+    if (_saving) return;
+
     final v = _visitor;
     if (v == null || !_hasServices) {
       _toast('Pick a visitor and tick at least one service first.', kWarning);
@@ -486,6 +497,29 @@ bool _matchesTokens(ClinicProfile p, List<String> tokens) {
       return;
     }
 
+    // Lock the button right away, until everything is finished.
+    setState(() {
+      _saving = true;
+      _saveError = null;
+    });
+    try {
+      await _runCompleteConsultation(v);
+    } catch (e) {
+      _fail(_saveErrorText(e));
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  /// Shows the error inside the page (red banner) and as a toast.
+  /// The wizard stays on the current step.
+  void _fail(String message) {
+    if (!mounted) return;
+    setState(() => _saveError = message);
+    _toast(message, kDanger, seconds: 6);
+  }
+
+  Future<void> _runCompleteConsultation(ClinicProfile v) async {
     final name = v.middleInitial.isEmpty
         ? '${v.lastName}, ${v.firstName}'
         : '${v.lastName}, ${v.firstName} ${v.middleInitial}';
@@ -518,29 +552,28 @@ bool _matchesTokens(ClinicProfile p, List<String> tokens) {
     );
     if (confirmed != true || !mounted) return;
 
+    // ── Editing an existing visit ──
     if (_isEditing) {
-      final updateReason = _reasonForVisitCtrl.text.trim();
-      setState(() => _saving = true);
       try {
         await VisitService.update(
           widget.editVisitId!,
-          complaint: updateReason,
+          complaint: _reasonForVisitCtrl.text.trim(),
           academicPeriodId: _academicPeriodId,
         );
-        await _saveStepThreeToServer(widget.editVisitId!);
       } catch (e) {
-        if (!mounted) return;
-        setState(() => _saving = false);
-        _toast('Could not update visit: $e', kDanger);
+        _fail(_saveErrorText(e, action: 'update the visit'));
         return;
       }
+      final ok = await _saveStepThreeToServer(widget.editVisitId!,
+          editing: true);
+      if (!ok) return; // stay on this step; the error banner is showing
       if (!mounted) return;
-      setState(() => _saving = false);
       _toast('Visit updated by $_currentUserName.', kPrimary);
       Navigator.of(context).pop(true);
       return;
     }
 
+    // ── New visit ──
     // Unedited values come from the Supabase server clock at the moment of saving.
     final saveNow = await TimeService.serverNow();
     if (!mounted) return;
@@ -552,42 +585,86 @@ bool _matchesTokens(ClinicProfile p, List<String> tokens) {
       return;
     }
 
-    setState(() => _saving = true);
-    final String? patientUuid = _patientUuid;
-    Visit? savedVisit;
-    try {
-      savedVisit = await VisitService.create(
-        patientId: patientUuid!,
-        patientNo: v.id,
-        patientName: name,
-        category: v.category,
-        department: v.isStudent ? v.program : v.department,
-        yearPosition: v.isStudent ? v.yearLevel : v.position,
-        complaint: complaint,
-        reasonForVisit: _reasonForVisitCtrl.text.trim(),
-        visitDate: timeInAt,
-        visitTime: VisitTimes.clock(timeInAt),
-        timeOut: timeOutAt,
-        academicPeriodId: _academicPeriodId,
-      );
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _saving = false);
-      _toast('Could not save visit: $e', kDanger);
-      return;
+    String? visitId = _pendingVisitId;
+
+    if (visitId == null) {
+      // First attempt: create the visit row.
+      final String? patientUuid = _patientUuid;
+      try {
+        final savedVisit = await VisitService.create(
+          patientId: patientUuid!,
+          patientNo: v.id,
+          patientName: name,
+          category: v.category,
+          department: v.isStudent ? v.program : v.department,
+          yearPosition: v.isStudent ? v.yearLevel : v.position,
+          complaint: complaint,
+          reasonForVisit: _reasonForVisitCtrl.text.trim(),
+          visitDate: timeInAt,
+          visitTime: VisitTimes.clock(timeInAt),
+          timeOut: timeOutAt,
+          academicPeriodId: _academicPeriodId,
+        );
+        visitId = savedVisit.id;
+      } catch (e) {
+        _fail(_saveErrorText(e));
+        return;
+      }
+      if (visitId == null || visitId.isEmpty) {
+        _fail('The visit was not saved (no visit number came back). '
+            'Tap Complete again.');
+        return;
+      }
+      // Remember it: if the service details fail below, the next tap on
+      // Complete reuses this visit instead of creating a second one.
+      _pendingVisitId = visitId;
+    } else {
+      // Retry after a failed save: keep the same visit, refresh the reason.
+      try {
+        await VisitService.update(
+          visitId,
+          complaint: _reasonForVisitCtrl.text.trim(),
+          academicPeriodId: _academicPeriodId,
+        );
+      } catch (e) {
+        _fail(_saveErrorText(e, action: 'update the visit'));
+        return;
+      }
     }
     if (!mounted) return;
-    setState(() => _saving = false);
 
-    if (savedVisit.id != null) {
-      await _saveStepThreeToServer(savedVisit.id!);
-      if (!mounted) return;
-    }
+    // Services with nothing to store (e.g. Medical Certificate) pass here.
+    final ok = await _saveStepThreeToServer(visitId);
+    if (!ok || !mounted) return; // stay on this step, do NOT reset
 
-    if (!mounted) return;
+    // Everything is saved. Only now do we go back to step 1.
+    _pendingVisitId = null;
     _toast('Saved Record', kPrimary);
-
     _resetVisit();
+  }
+
+  /// Turns a save failure into a message a clinic worker can act on.
+  String _saveErrorText(Object e, {String action = 'save the visit'}) {
+    if (e is VisitSaveException) {
+      return 'Not everything was saved:\n${e.message}\n'
+          'Nothing was cleared. Fix the problem or check your connection, '
+          'then tap Complete again.';
+    }
+    final t = e.toString().toLowerCase();
+    final offline = t.contains('socketexception') ||
+        t.contains('failed host lookup') ||
+        t.contains('clientexception') ||
+        t.contains('xmlhttprequest') ||
+        t.contains('failed to fetch') ||
+        t.contains('network') ||
+        t.contains('connection') ||
+        t.contains('timeout') ||
+        t.contains('timed out');
+    if (offline) {
+      return 'Could not $action: no internet connection. '
+          'Check your WiFi or data, then tap Complete again.';
+    }
+    return 'Could not $action: $e';
   }
 
   Future<bool?> _confirmVisitDialog({
@@ -669,6 +746,8 @@ bool _matchesTokens(ClinicProfile p, List<String> tokens) {
       _searchCtrl.clear();
       _reasonForVisitCtrl.clear();
       _visitorFilter = 'All';
+      _pendingVisitId = null;
+      _saveError = null;
     });
   }
 
@@ -695,6 +774,12 @@ bool _matchesTokens(ClinicProfile p, List<String> tokens) {
               ],
             ),
           ),
+          if (_saveError != null && _step > 0)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
+              child: _noteBanner(
+                  kDanger, Icons.error_outline_rounded, _saveError!),
+            ),
           Expanded(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
@@ -767,7 +852,7 @@ bool _matchesTokens(ClinicProfile p, List<String> tokens) {
       nav: StepThreeNav(
         onBack: () => _goToStep(1),
         onContinue: isLast ? _completeConsultation : _saveStepThree,
-        continueLabel: isLast ? 'Complete Consultation' : 'Continue',
+        continueLabel: isLast ? 'Complete' : 'Continue',
         continueEnabled: isLast ? _canSave : _hasServices,
         saving: _saving,
       ),
@@ -2448,7 +2533,7 @@ bool _matchesTokens(ClinicProfile p, List<String> tokens) {
             ? _hasServices
             : _step + 1 <= _maxReachable;
     final label = isLast
-        ? 'Complete Consultation'
+        ? 'Complete'
         : isDetails
             ? 'Continue'
             : 'Proceed';
@@ -2519,22 +2604,30 @@ bool _matchesTokens(ClinicProfile p, List<String> tokens) {
     );
   }
 
-  Future<void> _saveStepThreeToServer(String visitId) async {
-    final controller = _details;
-    if (controller == null || controller.drafts.isEmpty) return;
-    try {
-      await VisitDetailsService.saveAll(
-        visitId: visitId,
-        controller: controller,
-        userName: _currentUserName,
-      );
-    } catch (e) {
-      debugPrint('clinic visit: step 3 save failed: $e');
-      if (!mounted) return;
-      _toast('Visit saved, but the service details did not. Re-check step 3.',
-          kWarning);
-    }
-  }
+      /// Saves the service details of the visit. Returns true only when every
+      /// part was written (or when there is nothing to store). On failure it
+      /// shows the error in the page and returns false.
+      Future<bool> _saveStepThreeToServer(String visitId,
+          {bool editing = false}) async {
+        final controller = _details;
+        if (controller == null || controller.drafts.isEmpty) return true;
+        try {
+          await VisitDetailsService.saveAll(
+            visitId: visitId,
+            controller: controller,
+            userName: _currentUserName,
+          );
+          return true;
+        } catch (e) {
+          debugPrint('clinic visit: step 3 save failed: $e');
+          if (!mounted) return false;
+          _fail(_saveErrorText(e,
+              action: editing
+                  ? 'update the service details'
+                  : 'save the service details'));
+          return false;
+        }
+      }
 
   void _saveStepThree() {
     final controller = _detailsFor();
@@ -3165,16 +3258,18 @@ bool _matchesTokens(ClinicProfile p, List<String> tokens) {
     return DateFormat('MMM d, yyyy').format(parsed);
   }
 
-  void _toast(String message, Color color) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
+  void _toast(String message, Color color, {int seconds = 1}) {
+  if (!mounted) return;
+  ScaffoldMessenger.of(context)
+    ..hideCurrentSnackBar()
+    ..showSnackBar(
       SnackBar(
         content: Text(message),
         backgroundColor: color,
         behavior: SnackBarBehavior.floating,
-        duration: const Duration(seconds: 1),
+        duration: Duration(seconds: seconds),
         margin: const EdgeInsets.fromLTRB(24, 0, 24, 52),
       ),
     );
-  }
+}
 }

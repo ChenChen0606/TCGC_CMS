@@ -1,4 +1,3 @@
-
 import 'package:clinicmanagementsystem/features/vitals/models/who_bmi.dart';
 import 'package:clinicmanagementsystem/features/vitals/models/vital_classifier.dart';
 import 'package:clinicmanagementsystem/features/vitals/models/vitals_bands.dart';
@@ -112,8 +111,11 @@ class VitalsInterpreter {
     Object? systolic,
     Object? diastolic, {
     String unit = ' mmHg',
+    int? ageYears,
+    String? sex,
   }) {
-    return VitalClassifier.bpReading(systolic, diastolic);
+    return VitalClassifier.bpReading(systolic, diastolic,
+        ageYears: ageYears, sex: sex);
   }
 
   static double? bmiFrom({Object? heightCm, Object? weightKg}) {
@@ -204,7 +206,8 @@ class VisitVitals {
 
   DateTime? measuredAt;
 
-  // Who is being measured: WHO BMI needs sex + age.
+  // Who is being measured: WHO BMI needs sex + age, and BP / pulse /
+  // breathing use the adult, teen or child table by age.
   String sex = '';
   DateTime? birthDate;
   DateTime? asOf;
@@ -213,6 +216,19 @@ class VisitVitals {
     this.sex = (sex ?? '').trim();
     this.birthDate = birthDate;
     this.asOf = asOf;
+  }
+
+  /// Age in whole years on the visit date. Null when the birth date is not
+  /// known (the adult tables are used then).
+  int? get ageYears {
+    final b = birthDate;
+    if (b == null) return null;
+    final ref = asOf ?? DateTime.now();
+    var years = ref.year - b.year;
+    if (ref.month < b.month || (ref.month == b.month && ref.day < b.day)) {
+      years -= 1;
+    }
+    return years < 0 ? null : years;
   }
 
   final Map<String, String> interpretations = {};
@@ -231,14 +247,30 @@ class VisitVitals {
 
   bool get isNotEmpty => !isEmpty;
 
-  VitalReading? get bloodPressure =>
-      VitalsInterpreter.bloodPressure(systolic, diastolic);
+  VitalReading? get bloodPressure => VitalsInterpreter.bloodPressure(
+        systolic,
+        diastolic,
+        ageYears: ageYears,
+        sex: sex,
+      );
 
-  VitalReading? get heartRateReading =>
-      VitalsInterpreter.reading('heart_rate', 'HR', heartRate, unit: ' bpm');
+  VitalReading? get heartRateReading {
+    final age = ageYears;
+    if (age != null && age < VitalClassifier.adultFromAge) {
+      return VitalClassifier.pulseReading(heartRate, ageYears: age);
+    }
+    return VitalsInterpreter.reading('heart_rate', 'HR', heartRate,
+        unit: ' bpm');
+  }
 
-  VitalReading? get respRateReading =>
-      VitalsInterpreter.reading('resp_rate', 'RR', respRate, unit: '/min');
+  VitalReading? get respRateReading {
+    final age = ageYears;
+    if (age != null && age < VitalClassifier.adultFromAge) {
+      return VitalClassifier.respReading(respRate, ageYears: age);
+    }
+    return VitalsInterpreter.reading('resp_rate', 'RR', respRate,
+        unit: '/min');
+  }
 
   VitalReading? get tempReading =>
       VitalsInterpreter.reading('temperature', 'Temp', tempC, unit: '°C');
@@ -249,7 +281,7 @@ class VisitVitals {
   double? get bmi =>
       VitalsInterpreter.bmiFrom(heightCm: heightCm, weightKg: weightKg);
 
-   VitalReading? get bmiReading => WhoBmi.reading(
+  VitalReading? get bmiReading => WhoBmi.reading(
         heightCm: heightCm,
         weightKg: weightKg,
         sex: sex,
@@ -264,7 +296,6 @@ class VisitVitals {
         birthDate: birthDate,
         asOf: asOf ?? DateTime.now(),
       );
-
 
   List<VitalReading> get readings => [
         bloodPressure,

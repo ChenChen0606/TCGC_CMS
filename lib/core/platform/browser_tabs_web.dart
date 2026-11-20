@@ -1,11 +1,15 @@
-
 // ignore_for_file: deprecated_member_use, avoid_web_libraries_in_flutter
 
 import 'dart:async';
 import 'dart:html' as html;
 import 'package:flutter/widgets.dart';
+import 'package:flutter_web_plugins/url_strategy.dart';
 
 bool get browserHistoryEnabled => true;
+
+/// Makes links look like /reports instead of /#reports.
+/// Must be called before runApp.
+void configureUrlStrategy() => usePathUrlStrategy();
 
 void Function(int index)? _onTab;
 StreamSubscription<html.PopStateEvent>? _popStateSub;
@@ -41,7 +45,8 @@ void initTabHistory(void Function(int index) onTab) {
 
   _popStateSub ??= html.window.onPopState.listen(_handlePopState);
 
-  // Read the current URL when the dashboard initializes.
+  // Read the current URL when the dashboard initializes (this is what keeps
+  // you on the same page after a refresh).
   final tab = _readTab();
   if (tab != null) {
     onTab(tab);
@@ -49,7 +54,7 @@ void initTabHistory(void Function(int index) onTab) {
     html.window.history.replaceState(
       {'tab': 0, 'epoch': _epoch},
       '',
-      '#dashboard',
+      '/dashboard',
     );
     onTab(0);
   }
@@ -65,7 +70,7 @@ void _handlePopState(html.PopStateEvent event) {
     html.window.history.replaceState(
       {'tab': 0, 'epoch': _epoch},
       '',
-      '#dashboard',
+      '/dashboard',
     );
     dashboard(0);
     return;
@@ -75,12 +80,11 @@ void _handlePopState(html.PopStateEvent event) {
 }
 
 int? _readTab() {
-  final hash = html.window.location.hash;
+  var path = html.window.location.pathname ?? '';
+  if (path.startsWith('/')) path = path.substring(1);
+  if (path.endsWith('/')) path = path.substring(0, path.length - 1);
 
-  final index = _tabRoutes.indexOf(
-    hash.startsWith('#') ? hash.substring(1) : hash,
-  );
-
+  final index = _tabRoutes.indexOf(path);
   if (index < 0) return null;
   return index;
 }
@@ -95,15 +99,16 @@ void pushTabHistory(int index) {
   html.window.history.pushState(
     {'tab': index, 'epoch': _epoch},
     '',
-    '#$route',
+    '/$route',
   );
 }
 
+/// Called when the user signs out: go back to the plain address.
 void resetTabHistory() {
   html.window.history.replaceState(
     {'tab': 0, 'epoch': _epoch},
     '',
-    '#dashboard',
+    '/',
   );
 }
 

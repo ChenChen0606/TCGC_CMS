@@ -965,14 +965,23 @@ class _DashboardOverviewState extends State<DashboardOverview> {
     );
   }
 
-  List<Widget> _buildMetricItems({bool isMobile = false}) {
-    final todayRecords = _visits.where(_isToday).toList();
-    final total = todayRecords.length;
+List<Widget> _buildMetricItems({bool isMobile = false}) {
+  final todayRecords = _visits.where(_isToday).toList();
 
-    final students =
-        todayRecords.where((v) => v.personType == "Student").length;
-    final faculty = todayRecords.where((v) => v.personType == "Faculty").length;
-    final staff = todayRecords.where((v) => v.personType == "Staff").length;
+  // Total Visits: every visit counts (morning + afternoon = 2).
+  final total = todayRecords.length;
+
+  // Students / Faculty / Staff: each person counts once per day.
+  int people(String type) => todayRecords
+      .where((v) => v.personType == type)
+      .map((v) =>
+          v.personId.trim().isNotEmpty ? v.personId.trim() : v.displayName)
+      .toSet()
+      .length;
+
+  final students = people("Student");
+  final faculty = people("Faculty");
+  final staff = people("Staff");
 
     final List<Map<String, dynamic>> metrics = [
       {

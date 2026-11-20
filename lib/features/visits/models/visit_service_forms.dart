@@ -705,10 +705,14 @@ List<String> consultationReferralReasons(
 
   final dizzy = _strListOf(data['symptoms'])
       .any(kConsultationDizzinessComplaints.contains);
-  final anyAbnormal =
-      VitalClassifier.classifyBp(systolic, diastolic)?.isAbnormal == true ||
-          VitalClassifier.classifyPulse(pulse)?.isAbnormal == true ||
-          VitalClassifier.classifyTemp(temp)?.isAbnormal == true;
+  final anyAbnormal = VitalClassifier.classifyBp(systolic, diastolic,
+              ageYears: vitals.ageYears, sex: vitals.sex)
+          ?.isAbnormal ==
+          true ||
+      VitalClassifier.classifyPulse(pulse, ageYears: vitals.ageYears)
+              ?.isAbnormal ==
+          true ||
+      VitalClassifier.classifyTemp(temp)?.isAbnormal == true;
   if (dizzy && anyAbnormal) {
     reasons.add('Dizziness / fainting with abnormal vitals.');
   }

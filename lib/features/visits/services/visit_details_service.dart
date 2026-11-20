@@ -18,6 +18,20 @@ const Map<String, String> _serviceCodeByDartId = {
   'vital_signs': 'VITAL_SIGNS',
 };
 
+/// Thrown by [VisitDetailsService.saveAll] when one or more parts of the
+/// visit's service details could not be written. [failures] has one readable
+/// line per problem.
+class VisitSaveException implements Exception {
+  VisitSaveException(this.failures);
+
+  final List<String> failures;
+
+  String get message => failures.map((f) => '• $f').join('\n');
+
+  @override
+  String toString() => message;
+}
+
 Map<String, String> dartIdByServiceTypeId(Iterable<dynamic> serviceTypes) {
   final idByCode = <String, String>{
     for (final t in serviceTypes)
@@ -390,6 +404,15 @@ class VisitDetailsService {
     return null;
   }
 
+  /// Saves every service of the visit AND its detail records.
+  ///
+  /// Returns normally only when EVERYTHING was written. If anything fails,
+  /// every other part is still attempted (so nothing is skipped), and then a
+  /// [VisitSaveException] listing each failure is thrown. The caller must not
+  /// treat the visit as saved when this throws.
+  ///
+  /// Services that have no detail table (e.g. Medical Certificate) only need
+  /// their `clinic_visit_services` row, so they save fine.
   static Future<void> saveAll({
     required String visitId,
     required VisitDetailsController controller,
@@ -406,95 +429,142 @@ class VisitDetailsService {
         .toList();
     if (touched.isEmpty) return;
 
+    final failures = <String>[];
+
     final typeIds = await _serviceTypeIds();
-    if (typeIds.isEmpty) return;
+    if (typeIds.isEmpty) {
+      throw VisitSaveException([
+        'Could not read the list of clinic services. Check your internet '
+            'connection.',
+      ]);
+    }
 
     final performedBy = supabaseClient.auth.currentUser?.id ?? '';
 
     String? medicationServiceId;
     final visitServiceByDart = <String, String>{};
+
+    // ---- 1. The service rows (clinic_visit_services) ----
     for (final d in touched) {
       final code = _serviceCodeByDartId[d.serviceId];
       final typeId = code == null ? null : typeIds[code];
-      if (typeId == null) continue;
+      if (typeId == null) {
+        // A service with no detail table and no service type has nothing to
+        // store (Medical Certificate). Anything else is a real problem.
+        if (d.serviceId != 'medicine_certificate') {
+          failures.add('${d.label}: this service is not set up in the '
+              'database, so it could not be saved.');
+        }
+        continue;
+      }
 
-      d.refreshStatus();
-      final completedAt =
-          d.isComplete ? DateTime.now().toUtc().toIso8601String() : null;
-
-      Map<String, dynamic>? existing;
       try {
-        existing = await supabaseClient
+        d.refreshStatus();
+        final completedAt =
+            d.isComplete ? DateTime.now().toUtc().toIso8601String() : null;
+
+        // A failed lookup must NOT fall through to an insert (it would
+        // create a duplicate row), so errors here go to the catch below.
+        final existing = await supabaseClient
             .from('clinic_visit_services')
             .select('visit_service_id')
             .eq('visit_id', visitId)
             .eq('service_type_id', typeId)
             .maybeSingle();
-      } catch (_) {}
 
-      if (existing != null) {
-        final id = '${existing['visit_service_id']}';
-        await supabaseClient.from('clinic_visit_services').update({
-          'status': d.status.label,
-          'performed_by': performedBy,
-          if (completedAt != null) 'completed_at': completedAt,
-        }).eq('visit_service_id', id);
+        String id;
+        if (existing != null) {
+          id = '${existing['visit_service_id']}';
+          await supabaseClient.from('clinic_visit_services').update({
+            'status': d.status.label,
+            'performed_by': performedBy,
+            if (completedAt != null) 'completed_at': completedAt,
+          }).eq('visit_service_id', id);
+        } else {
+          final inserted = await supabaseClient
+              .from('clinic_visit_services')
+              .insert({
+                'visit_id': visitId,
+                'service_type_id': typeId,
+                'status': d.status.label,
+                'performed_by': performedBy,
+                if (completedAt != null) 'completed_at': completedAt,
+              })
+              .select('visit_service_id')
+              .single();
+          id = '${inserted['visit_service_id']}';
+        }
         visitServiceByDart[d.serviceId] = id;
         if (d.serviceId == 'medication') medicationServiceId = id;
-      } else {
-        final inserted = await supabaseClient
-            .from('clinic_visit_services')
-            .insert({
-              'visit_id': visitId,
-              'service_type_id': typeId,
-              'status': d.status.label,
-              'performed_by': performedBy,
-              if (completedAt != null) 'completed_at': completedAt,
-            })
-            .select('visit_service_id')
-            .single();
-        final id = '${inserted['visit_service_id']}';
-        visitServiceByDart[d.serviceId] = id;
-        if (d.serviceId == 'medication') medicationServiceId = id;
+      } catch (e) {
+        debugPrint('visit details: service row ${d.serviceId} failed: $e');
+        failures.add('${d.label}: could not be saved to the visit.');
       }
     }
 
+    // ---- 2. The detail records of each service ----
     for (final entry in visitServiceByDart.entries) {
       final draft = controller.draftFor(entry.key);
       if (draft == null) continue;
-      await saveServiceRecord(
-        visitServiceId: entry.value,
-        visitId: visitId,
-        dartServiceId: entry.key,
-        d: draft,
-        vitals: controller.vitals,
-        recordedBy: performedBy,
-      );
+      try {
+        final ok = await saveServiceRecord(
+          visitServiceId: entry.value,
+          visitId: visitId,
+          dartServiceId: entry.key,
+          d: draft,
+          vitals: controller.vitals,
+          recordedBy: performedBy,
+        );
+        if (!ok) {
+          failures.add('${draft.label}: the details could not be saved.');
+        }
+      } catch (e) {
+        debugPrint('visit details: record ${entry.key} failed: $e');
+        failures.add('${draft.label}: the details could not be saved.');
+      }
     }
 
-    await _saveMedications(visitId, controller, medicationServiceId);
-
+    // ---- 3. Medicines (and stock) ----
     try {
-      _recentSaved[visitId] = _snapshotOf(controller);
+      final problem =
+          await _saveMedications(visitId, controller, medicationServiceId);
+      if (problem != null) failures.add(problem);
+    } catch (e) {
+      debugPrint('visit details: medications failed: $e');
+      failures.add('Medication: the medicines could not be saved.');
+    }
 
-      while (_recentSaved.length > 100) {
-        _recentSaved.remove(_recentSaved.keys.first);
-      }
-    } catch (_) {}
+    if (failures.isEmpty) {
+      try {
+        _recentSaved[visitId] = _snapshotOf(controller);
+
+        while (_recentSaved.length > 100) {
+          _recentSaved.remove(_recentSaved.keys.first);
+        }
+      } catch (_) {}
+    }
+
+    // Something may have been written even on a partial failure, so other
+    // screens are told to reload either way.
     DataTracker.bump();
+
+    if (failures.isNotEmpty) throw VisitSaveException(failures);
   }
 
-  static Future<void> _saveMedications(
+  /// Returns null when the medicines were saved, or a readable problem.
+  static Future<String?> _saveMedications(
     String visitId,
     VisitDetailsController controller,
     String? medicationServiceId,
   ) async {
     final med = controller.draftFor('medication');
-    if (med == null || medicationServiceId == null) return;
+    // No medication service on this visit (or its row already failed and was
+    // reported): nothing more to do here.
+    if (med == null || medicationServiceId == null) return null;
 
     final rows = med.medicines.where((m) => m.medicineId != null).toList();
 
-    String? headerId;
+    String headerId;
     try {
       final existing = await supabaseClient
           .from('medication_services')
@@ -514,8 +584,9 @@ class VisitDetailsService {
             .single();
         headerId = '${inserted['medication_service_id']}';
       }
-    } catch (_) {
-      return;
+    } catch (e) {
+      debugPrint('visit details: medication header failed: $e');
+      return 'Medication: the medication record could not be saved.';
     }
 
     final previously = <int, int>{};
@@ -530,7 +601,11 @@ class VisitDetailsService {
         previously[id] =
             (previously[id] ?? 0) + ((o['quantity'] as num?)?.toInt() ?? 0);
       }
-    } catch (_) {}
+    } catch (e) {
+      // Without the old items the stock change cannot be worked out safely.
+      debugPrint('visit details: medication old items failed: $e');
+      return 'Medication: the earlier medicines could not be read.';
+    }
 
     final now = <int, int>{};
     for (final m in rows) {
@@ -558,8 +633,13 @@ class VisitDetailsService {
             },
         ]);
       }
-    } catch (_) {}
+    } catch (e) {
+      // Stock is not touched when the items were not written.
+      debugPrint('visit details: medication items failed: $e');
+      return 'Medication: the medicines could not be saved.';
+    }
 
+    var stockFailed = false;
     for (final id in {...previously.keys, ...now.keys}) {
       final delta = (now[id] ?? 0) - (previously[id] ?? 0);
       if (delta == 0) continue;
@@ -575,8 +655,16 @@ class VisitDetailsService {
         await supabaseClient
             .from('medicines')
             .update({'stock': target}).eq('id', id);
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('visit details: stock update failed: $e');
+        stockFailed = true;
+      }
     }
+    if (stockFailed) {
+      return 'Medication: the medicines were saved but the clinic stock could '
+          'not be updated.';
+    }
+    return null;
   }
 
   static Future<void> removeServices({

@@ -493,6 +493,9 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
   }
 
   void _applyFilters() {
+    if (_selectedAge != 'All' && !_availableAges.contains(_selectedAge)) {
+      _selectedAge = 'All';
+    }
     final q = _searchQuery.trim().toLowerCase();
 
     // Everything except the BMI indicator filter.
@@ -902,11 +905,39 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
       r.acadYear == year &&
       (sem == null || sem == 'All' || r.semester == sem));
 
+  /// Ages found in the records that match every filter EXCEPT the age
+  /// filter itself. So "Today" lists only the ages seen today, and "All"
+  /// lists every age.
   List<String> get _availableAges {
-    final ages = <int>{
-      for (final r in _allRecords)
-        if (r.age != null) r.age!,
-    };
+    final q = _searchQuery.trim().toLowerCase();
+    final ages = <int>{};
+    for (final r in _allRecords) {
+      if (r.age == null) continue;
+      if (_selectedType != 'All' && !_inGroup(r, _selectedType)) continue;
+      if (_selectedInstitute != 'All' &&
+          r.instituteName != _selectedInstitute) {
+        continue;
+      }
+      if (_selectedSex != 'All' &&
+          r.sex.toLowerCase() != _selectedSex.toLowerCase()) {
+        continue;
+      }
+      if (!_matchesBirthFilter(r)) continue;
+      if (!_matchesDateFilter(r)) continue;
+      if (q.isNotEmpty) {
+        final hay = [
+          r.personId,
+          r.fullName,
+          r.personType,
+          r.instituteName,
+          r.programName,
+          r.departmentOffice,
+          r.position,
+        ].join(' ').toLowerCase();
+        if (!hay.contains(q)) continue;
+      }
+      ages.add(r.age!);
+    }
     return (ages.toList()..sort()).map((a) => '$a').toList();
   }
 

@@ -310,8 +310,17 @@ class TCGCClinicApp extends StatelessWidget {
         ),
         visualDensity: VisualDensity.standard,
       ),
-      home: const SplashScreen(),
-      onUnknownRoute: (settings) => MaterialPageRoute(
+      // Whatever path the browser opens (/reports, /bmi-records, ...),
+      // start with ONE SplashScreen. The tab is restored later by
+      // initTabHistory, which reads the path.
+      onGenerateInitialRoutes: (String initialRoute) => [
+        MaterialPageRoute(
+          settings: const RouteSettings(name: '/'),
+          builder: (context) => const SplashScreen(),
+        ),
+      ],
+      onGenerateRoute: (settings) => MaterialPageRoute(
+        settings: const RouteSettings(name: '/'),
         builder: (context) => const SplashScreen(),
       ),
     );
