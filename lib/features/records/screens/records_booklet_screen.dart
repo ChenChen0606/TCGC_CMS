@@ -224,8 +224,8 @@ class RecordsBookletState extends State<RecordsBooklet> {
   final Map<String, List<_DayGroup>> _groupCache = {};
   Set<String>? _periodsWithVisits;
   int _periodsVer = -1;
-  List<int>? _ageCache;
-  int _ageVer = -1;
+  //List<int>? _ageCache;
+  //int _ageVer = -1;
 
   // ---- paging of the table ----------------------------------------------
   static const int _pageSize = 50;
