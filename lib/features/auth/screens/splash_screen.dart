@@ -6,10 +6,25 @@ import 'package:clinicmanagementsystem/features/auth/screens/force_password_chan
 import 'package:clinicmanagementsystem/features/auth/recovery_state.dart';
 import 'package:clinicmanagementsystem/features/dashboard/screens/clinic_dashboard_screen.dart';
 import 'package:clinicmanagementsystem/features/account/services/account_service.dart';
-import 'package:clinicmanagementsystem/core/services/reference_data_service.dart';
 import 'package:clinicmanagementsystem/core/services/app_warmup.dart';
 import 'package:clinicmanagementsystem/core/config/supabase_config.dart';
 import 'package:clinicmanagementsystem/core/theme/app_colors.dart';
+
+/// The first screen after sign-in: the forced password change, or the
+/// dashboard. Shared by the login screen and the page-refresh restore.
+Widget homeScreenFor(SessionInfo s) => s.mustChangePassword
+    ? ForcePasswordChangeScreen(
+        userRole: s.role,
+        userEmail: s.email,
+        userName: s.name,
+        userUsername: s.username,
+      )
+    : ClinicDashboard(
+        userRole: s.role,
+        userEmail: s.email,
+        userName: s.name,
+        userUsername: s.username,
+      );
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -26,74 +41,16 @@ class _SplashScreenState extends State<SplashScreen> {
   }
 
   /// Builds the screen for a user who is already signed in (after a page
-  /// refresh). Same data as the login screen uses. Returns null when
-  /// anything is wrong, and the app then goes to the login page.
+  /// refresh). Returns null when anything is wrong, and the app then goes to
+  /// the login page.
   Future<Widget?> _signedInScreen() async {
     try {
-      final authUser = supabaseClient.auth.currentUser;
-      if (authUser == null) return null;
-
-      Map<String, dynamic>? accountRow;
-      try {
-        accountRow = await supabaseClient
-            .from('useraccount')
-            .select()
-            .eq('user_id', authUser.id)
-            .maybeSingle();
-      } catch (e) {
-        debugPrint('SPLASH: useraccount fetch failed: $e');
-      }
-
-      bool isActive;
-      if (accountRow != null && accountRow['is_active'] is bool) {
-        isActive = accountRow['is_active'] as bool;
-      } else {
-        final raw = AccountService.metadataOf(authUser)['is_active'];
-        if (raw is bool) {
-          isActive = raw;
-        } else if (raw is String) {
-          isActive = raw.toLowerCase() != 'false';
-        } else {
-          isActive = true;
-        }
-      }
-
-      if (!isActive) {
-        await supabaseClient.auth.signOut();
-        return null;
-      }
-
-      await ReferenceCatalog.loadAfterSignIn();
+      final user = supabaseClient.auth.currentUser;
+      if (user == null) return null;
+      final session = await AccountService.openSession(user);
+      if (session == null) return null;
       AppWarmup.start();
-
-      final profile = accountRow != null
-          ? AppProfile.fromSupabase(accountRow)
-              .withNamesFrom(AccountService.profileFromAuthUser(authUser))
-          : AccountService.profileFromAuthUser(authUser);
-
-      final role = profile.role;
-      final userEmail = authUser.email ?? '';
-      final userUsername = profile.username.isNotEmpty
-          ? profile.username
-          : AccountService.usernameFromAuthEmail(authUser.email);
-      final userName =
-          profile.displayName.isNotEmpty ? profile.displayName : userUsername;
-
-      if (profile.mustChangePassword) {
-        return ForcePasswordChangeScreen(
-          userRole: role,
-          userEmail: userEmail,
-          userName: userName,
-          userUsername: userUsername,
-        );
-      }
-
-      return ClinicDashboard(
-        userRole: role,
-        userEmail: userEmail,
-        userName: userName,
-        userUsername: userUsername,
-      );
+      return homeScreenFor(session);
     } catch (e) {
       debugPrint('SPLASH: could not restore the session: $e');
       return null;
@@ -101,8 +58,17 @@ class _SplashScreenState extends State<SplashScreen> {
   }
 
   Future<void> _route() async {
-    await Future.delayed(const Duration(milliseconds: 1200));
-    if (!mounted) return;
+    // The splash stays up for at least this long, however fast the checks are.
+    final minimumShown = Future<void>.delayed(const Duration(seconds: 2));
+
+    Future<void> go(Widget screen) async {
+      await minimumShown;
+      if (!mounted) return;
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => screen),
+      );
+    }
 
     // Opened from a password reset email link
     if (RecoveryState.pending.value) {
@@ -116,11 +82,7 @@ class _SplashScreenState extends State<SplashScreen> {
 
       if (supabaseClient.auth.currentSession != null) {
         RecoveryState.pending.value = false;
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (_) => const ResetPasswordScreen()),
-        );
-        return;
+        return go(const ResetPasswordScreen());
       }
 
       // The link did not produce a session. Show an error on the login page.
@@ -135,20 +97,10 @@ class _SplashScreenState extends State<SplashScreen> {
     // and opens that tab.
     if (supabaseClient.auth.currentSession != null) {
       final home = await _signedInScreen();
-      if (!mounted) return;
-      if (home != null) {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (_) => home),
-        );
-        return;
-      }
+      if (home != null) return go(home);
     }
 
-    Navigator.pushReplacement(
-      context,
-      MaterialPageRoute(builder: (_) => const LoginScreen()),
-    );
+    return go(const LoginScreen());
   }
 
   @override

@@ -322,7 +322,15 @@ class _IndividualRecordScreenState extends State<IndividualRecordScreen>
   }
 
   void _catalogListener() {
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    // The year fields start empty when this screen is built before the
+    // reference data arrives; fill them once it is here.
+    if (_cYearStart.text.isEmpty && _cYearEnd.text.isEmpty) {
+      final ay = _splitAcademicYear(_defaultAcademicYear);
+      _cYearStart.text = ay.$1;
+      _cYearEnd.text = ay.$2;
+    }
+    setState(() {});
   }
 
   @override
@@ -350,6 +358,8 @@ class _IndividualRecordScreenState extends State<IndividualRecordScreen>
 
   static String get _defaultSemester => kCurrentSemester;
 
+  /// "2025-2026" -> ("2025", "2026"). Anything else (for example an empty
+  /// string while the reference data is still loading) gives two empty parts.
   static (String, String) _splitAcademicYear(String ay) {
     final parts = ay.split('-');
     if (parts.length == 2 &&
@@ -357,8 +367,7 @@ class _IndividualRecordScreenState extends State<IndividualRecordScreen>
         int.tryParse(parts[1]) != null) {
       return (parts[0], parts[1]);
     }
-    final def = _defaultAcademicYear.split('-');
-    return (def[0], def[1]);
+    return ('', '');
   }
 
   String get _composedAcademicYear =>

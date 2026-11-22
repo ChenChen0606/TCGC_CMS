@@ -1,8 +1,11 @@
 import 'dart:math';
 import 'dart:typed_data';
 
-import 'package:clinicmanagementsystem/core/config/supabase_config.dart';
+import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+
+import 'package:clinicmanagementsystem/core/config/supabase_config.dart';
+import 'package:clinicmanagementsystem/core/services/profile_state.dart';
 
 class AppProfile {
   final String id;
@@ -11,7 +14,6 @@ class AppProfile {
   final String lastName;
   final String username;
   final String email;
-  final String contact;
   final String avatarUrl;
   final String role;
   bool isActive;
@@ -25,7 +27,6 @@ class AppProfile {
     this.lastName = '',
     this.username = '',
     this.email = '',
-    this.contact = '',
     this.avatarUrl = '',
     this.role = 'Clinic Staff',
     this.isActive = true,
@@ -46,7 +47,6 @@ class AppProfile {
       lastName: (row['ln'] as String? ?? '').trim(),
       username: (row['username'] as String? ?? '').trim(),
       email: (row['email'] as String? ?? '').trim(),
-      contact: '',
       avatarUrl: (row['avatar_url'] as String? ?? '').trim(),
       role: (row['role'] as String?)?.isNotEmpty == true
           ? row['role'] as String
@@ -57,26 +57,45 @@ class AppProfile {
     );
   }
 
-  AppProfile withNamesFrom(AppProfile other) => AppProfile(
-        id: id.isNotEmpty ? id : other.id,
-        firstName: firstName.isNotEmpty ? firstName : other.firstName,
-        middleName: middleName.isNotEmpty ? middleName : other.middleName,
-        lastName: lastName.isNotEmpty ? lastName : other.lastName,
-        username: username.isNotEmpty ? username : other.username,
-        email: email.isNotEmpty ? email : other.email,
-        contact: '',
-        avatarUrl: avatarUrl.isNotEmpty ? avatarUrl : other.avatarUrl,
-        role: role,
-        isActive: isActive,
-        mustChangePassword: mustChangePassword,
-        createdAt: createdAt ?? other.createdAt,
-      );
+  /// Fills what this row lacks from [other] (the auth metadata). Names are
+  /// taken from ONE source only: if the row has any name, all three come from
+  /// it, so a cleared middle name stays cleared instead of coming back from
+  /// the old metadata.
+  AppProfile withNamesFrom(AppProfile other) {
+    final useOwnNames = fullName.isNotEmpty;
+    return AppProfile(
+      id: id.isNotEmpty ? id : other.id,
+      firstName: useOwnNames ? firstName : other.firstName,
+      middleName: useOwnNames ? middleName : other.middleName,
+      lastName: useOwnNames ? lastName : other.lastName,
+      username: username.isNotEmpty ? username : other.username,
+      email: email.isNotEmpty ? email : other.email,
+      avatarUrl: avatarUrl.isNotEmpty ? avatarUrl : other.avatarUrl,
+      role: role,
+      isActive: isActive,
+      mustChangePassword: mustChangePassword,
+      createdAt: createdAt ?? other.createdAt,
+    );
+  }
 
   static DateTime? _parseTs(Object? v) {
     if (v is DateTime) return v;
     if (v is String) return DateTime.tryParse(v);
     return null;
   }
+}
+
+/// Everything the app needs to open the main screen for a signed-in user.
+class SessionInfo {
+  const SessionInfo(this.profile, this.email, this.username);
+
+  final AppProfile profile;
+  final String email;
+  final String username;
+
+  String get role => profile.role;
+  bool get mustChangePassword => profile.mustChangePassword;
+  String get name => profile.displayName.isNotEmpty ? profile.displayName : username;
 }
 
 class AccountService {
@@ -133,7 +152,6 @@ class AccountService {
       lastName: _metaString(meta, 'last_name'),
       username: username,
       email: (user?.email ?? '').trim(),
-      contact: _metaString(meta, 'contact'),
       avatarUrl: _metaString(meta, 'avatar_url'),
       role: _metaString(meta, 'role').isNotEmpty
           ? _metaString(meta, 'role')
@@ -151,43 +169,66 @@ class AccountService {
     return role == 'Clinic Head' || role == 'Clinic Staff';
   }
 
-  static Future<List<AppProfile>> fetchAll() async {
-    final rows = await _db.from('useraccount').select().order('created_at');
-    return rows
-        .map<AppProfile>(
-            (r) => AppProfile.fromSupabase(Map<String, dynamic>.from(r)))
-        .toList();
+  static List<AppProfile> _profiles(List<dynamic> rows) => [
+        for (final r in rows)
+          AppProfile.fromSupabase(Map<String, dynamic>.from(r as Map))
+      ];
+
+  static Future<List<AppProfile>> fetchAll() async =>
+      _profiles(await _db.from('useraccount').select().order('created_at'));
+
+  static Future<List<AppProfile>> fetchActiveClinicHeads() async =>
+      _profiles(await _db
+          .from('useraccount')
+          .select()
+          .eq('role', 'Clinic Head')
+          .eq('is_active', true)
+          .order('ln'));
+
+  static Future<Map<String, dynamic>?> _ownRow(String uid) async {
+    final row =
+        await _db.from('useraccount').select().eq('user_id', uid).maybeSingle();
+    return row == null ? null : Map<String, dynamic>.from(row);
   }
 
-  static Future<List<AppProfile>> fetchActiveClinicHeads() async {
-    final rows = await _db
-        .from('useraccount')
-        .select()
-        .eq('role', 'Clinic Head')
-        .eq('is_active', true)
-        .order('ln');
-    return rows
-        .map<AppProfile>(
-            (r) => AppProfile.fromSupabase(Map<String, dynamic>.from(r)))
-        .toList();
+  static AppProfile _merge(Map<String, dynamic>? row, User user) {
+    final fromAuth = profileFromAuthUser(user);
+    return row == null
+        ? fromAuth
+        : AppProfile.fromSupabase(row).withNamesFrom(fromAuth);
   }
 
   static Future<AppProfile?> fetchOwn() async {
     final user = _db.auth.currentUser;
-    final uid = user?.id;
-    if (uid == null) return null;
+    if (user == null) return null;
     try {
-      final row = await _db
-          .from('useraccount')
-          .select()
-          .eq('user_id', uid)
-          .maybeSingle();
-      if (row == null) return profileFromAuthUser(user);
-      return AppProfile.fromSupabase(Map<String, dynamic>.from(row))
-          .withNamesFrom(profileFromAuthUser(user));
+      return _merge(await _ownRow(user.id), user);
     } catch (_) {
       return profileFromAuthUser(user);
     }
+  }
+
+  /// Used by the login screen and by the page-refresh restore, so both open
+  /// the app the same way. Returns null (after signing out) when the account
+  /// is deactivated.
+  static Future<SessionInfo?> openSession(User user) async {
+    Map<String, dynamic>? row;
+    try {
+      row = await _ownRow(user.id);
+    } catch (e) {
+      debugPrint('SESSION: useraccount fetch failed: $e');
+    }
+
+    final profile = _merge(row, user);
+    if (!profile.isActive) {
+      await _db.auth.signOut();
+      return null;
+    }
+
+    final username = profile.username.isNotEmpty
+        ? profile.username
+        : usernameFromAuthEmail(user.email);
+    return SessionInfo(profile, user.email ?? '', username);
   }
 
   static Future<String?> resolveAuthEmailForIdentifier(
@@ -263,16 +304,7 @@ class AccountService {
             'Account was created, but its profile could not be loaded. '
             'It will appear in the list shortly.');
       }
-      final row = await _db
-          .from('useraccount')
-          .select()
-          .eq('user_id', uid)
-          .maybeSingle();
-      if (row == null) {
-        throw AuthException(
-            'Account was created. Refresh the list to see it appear.');
-      }
-      return AppProfile.fromSupabase(Map<String, dynamic>.from(row));
+      return await _createdProfile(uid);
     } on Exception catch (e) {
       if (e is FunctionException && e.status != 404 && e.status != 308) {
         final details = e.details;
@@ -300,16 +332,7 @@ class AccountService {
             'Account was created, but its profile could not be loaded. '
             'Refresh the list to see it appear.');
       }
-      final row = await _db
-          .from('useraccount')
-          .select()
-          .eq('user_id', id)
-          .maybeSingle();
-      if (row == null) {
-        throw AuthException(
-            'Account was created. It will appear in the list shortly.');
-      }
-      return AppProfile.fromSupabase(Map<String, dynamic>.from(row));
+      return await _createdProfile(id);
     } catch (e) {
       if ('$e'.toLowerCase().contains('could not find the function')) {
       } else {
@@ -370,6 +393,15 @@ class AccountService {
     return profileFromAuthUser(created);
   }
 
+  static Future<AppProfile> _createdProfile(String uid) async {
+    final row = await _ownRow(uid);
+    if (row == null) {
+      throw AuthException(
+          'Account was created. Refresh the list to see it appear.');
+    }
+    return AppProfile.fromSupabase(row);
+  }
+
   static Future<void> setActive(String userId, bool isActive) async {
     await _db
         .from('useraccount')
@@ -384,7 +416,11 @@ class AccountService {
     await _db.from('useraccount').delete().eq('user_id', userId);
   }
 
-  static Future<void> updateOwnProfile({
+  /// Saves the signed-in user's name. The database row is written first and
+  /// checked (a blocked update used to be ignored silently), then the auth
+  /// metadata is kept in step, and finally the shared name every screen shows
+  /// is refreshed.
+  static Future<AppProfile> updateOwnProfile({
     required String firstName,
     String middleName = '',
     required String lastName,
@@ -399,24 +435,38 @@ class AccountService {
     final mn = middleName.trim();
     final ln = lastName.trim();
 
-    await _db.auth.updateUser(UserAttributes(
-      data: <String, dynamic>{
+    final rows = await _db
+        .from('useraccount')
+        .update({
+          'fn': fn,
+          'mn': mn,
+          'ln': ln,
+          if (avatarUrl.trim().isNotEmpty) 'avatar_url': avatarUrl.trim(),
+        })
+        .eq('user_id', user.id)
+        .select();
+    if (rows.isEmpty) {
+      throw AuthException('Your profile could not be saved. '
+          'Your account may not have permission to edit it.');
+    }
+
+    try {
+      await _db.auth.updateUser(UserAttributes(data: <String, dynamic>{
         ...metadataOf(user),
         'first_name': fn,
         'middle_name': mn,
         'last_name': ln,
-      },
-    ));
+      }));
+    } catch (e) {
+      // The database already holds the new name; the metadata is only a
+      // fallback copy, so this must not fail the save.
+      debugPrint('PROFILE: metadata update failed: $e');
+    }
 
-    try {
-      final patch = <String, dynamic>{
-        'fn': fn,
-        'mn': mn,
-        'ln': ln,
-      };
-      if (avatarUrl.trim().isNotEmpty) patch['avatar_url'] = avatarUrl.trim();
-      await _db.from('useraccount').update(patch).eq('user_id', user.id);
-    } catch (_) {}
+    final profile = _merge(Map<String, dynamic>.from(rows.first as Map),
+        _db.auth.currentUser ?? user);
+    ProfileState.set(profile.displayName);
+    return profile;
   }
 
   static Future<bool> isUsernameAvailable(String username) async {

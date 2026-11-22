@@ -12,6 +12,7 @@ import 'package:clinicmanagementsystem/features/visits/models/visit_service_summ
 import 'package:clinicmanagementsystem/features/vitals/models/vitals.dart';
 import 'package:clinicmanagementsystem/features/account/services/account_service.dart';
 import 'package:clinicmanagementsystem/features/inventory/services/medicine_service.dart';
+import 'package:clinicmanagementsystem/core/services/data_tracker.dart';
 import 'package:clinicmanagementsystem/features/certificates/services/signatory_store.dart';
 import 'package:clinicmanagementsystem/core/services/time_service.dart';
 import 'package:clinicmanagementsystem/features/visits/services/visit_service.dart';
@@ -80,6 +81,15 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
 
   bool _medicinesLoadQueued = false;
 
+  /// When the medicine list was last read, so a stale list is re-read.
+  DateTime? _medicinesAt;
+  bool _refreshingMedicines = false;
+  bool _refreshAgain = false;
+  VoidCallback? _dataListener;
+
+  String _medQuery = '';
+  final Map<MedicineDose, int> _freqNonce = {};
+
   List<String>? _staffNames;
 
   bool _staffLoadQueued = false;
@@ -139,7 +149,19 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
   ClinicProfile get _v => widget.visitor;
 
   @override
+  void initState() {
+    super.initState();
+    // The inventory tells everyone when it changes (new medicine, restock,
+    // delete, a visit saved). Re-read the shelf so this screen is never stale.
+    _dataListener = () {
+      _refreshMedicines();
+    };
+    DataTracker.listen(_dataListener!);
+  }
+
+  @override
   void dispose() {
+    if (_dataListener != null) DataTracker.unlisten(_dataListener!);
     for (final t in _texts.values) {
       t.dispose();
     }
@@ -1403,7 +1425,7 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
             children: [
               for (final m in pickable)
                 _optionChip(
-                  label: m.stock > 0 ? '${m.name}  ·  ${m.stock}' : m.name,
+                  label: m.usableStock > 0 ? '${m.name}  ·  ${m.usableStock}' : m.name,
                   selected: chosen.contains(m.name),
                   onTap: () {
                     _toggleInventoryPick(d, f, m.name);
@@ -1499,8 +1521,48 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
     setState(() {});
   }
 
+  /// Re-reads the shelf WITHOUT blanking the screen, so a medicine added in
+  /// the inventory shows up here straight away.
+  Future<void> _refreshMedicines() async {
+    if (!mounted) return;
+    // Not loaded yet: the normal first load will read the fresh list.
+    if (_medicines == null) return;
+    if (_refreshingMedicines) {
+      _refreshAgain = true; // a change arrived mid-read: read once more
+      return;
+    }
+    _refreshingMedicines = true;
+    try {
+      final list = await MedicineService.fetchAll();
+      if (!mounted) return;
+      setState(() {
+        _medicines = list;
+        _medicinesAt = DateTime.now();
+      });
+    } catch (_) {
+      // keep showing the last list
+    } finally {
+      _refreshingMedicines = false;
+    }
+    if (_refreshAgain && mounted) {
+      _refreshAgain = false;
+      _refreshMedicines();
+    }
+  }
+
   void _ensureMedicinesLoaded() {
-    if (_medicines != null || _loadingMedicines || _medicinesLoadQueued) return;
+    if (_medicines != null) {
+      // Changed on another computer? Re-read a list older than 20 seconds.
+      final at = _medicinesAt;
+      if (at != null &&
+          !_refreshingMedicines &&
+          DateTime.now().difference(at) > const Duration(seconds: 20)) {
+        _medicinesAt = DateTime.now(); // don't queue it on every rebuild
+        WidgetsBinding.instance.addPostFrameCallback((_) => _refreshMedicines());
+      }
+      return;
+    }
+    if (_loadingMedicines || _medicinesLoadQueued) return;
     _medicinesLoadQueued = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _medicinesLoadQueued = false;
@@ -3099,15 +3161,77 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
     );
   }
 
+  static const Color _kExpiringColor = Color(0xFFEA580C);
+
+  static const List<String> _frequencyOptions = [
+    'Once a day',
+    'Twice a day',
+    '3 times a day',
+    'Every 4-6 hours',
+    'As needed',
+    'Single dose',
+  ];
+
+  Medicine? _medicineFor(int? id) {
+    if (id == null) return null;
+    for (final m in _medicines ?? const <Medicine>[]) {
+      if (m.id == id) return m;
+    }
+    return null;
+  }
+
+  /// The earliest usable batch that expires within the warning window.
+  MedicineBatch? _soonestBatch(Medicine m) {
+    for (final b in m.batches) {
+      if (!b.isExpired && b.isExpiringSoon) return b;
+    }
+    return null;
+  }
+
+  String _batchDate(MedicineBatch b) =>
+      b.expiryDate == null ? '' : DateFormat('MMM d, yyyy').format(b.expiryDate!);
+
+  String _inDays(int? d) {
+    if (d == null) return '';
+    if (d == 0) return 'today';
+    if (d == 1) return 'tomorrow';
+    return 'in $d days';
+  }
+
   Widget _medicinePicker(ServiceDraft d) {
     final loading = _medicines == null;
     final list = _medicines ?? const <Medicine>[];
     final pickable = list.where(VisitDetailsController.canPick).toList();
+    final unavailable = list
+        .where((m) => !m.isArchived && !VisitDetailsController.canPick(m))
+        .toList();
+
+    final q = _medQuery.trim().toLowerCase();
+    final shown = q.isEmpty
+        ? pickable
+        : pickable
+            .where((m) =>
+                m.name.toLowerCase().contains(q) ||
+                m.category.toLowerCase().contains(q))
+            .toList();
 
     final timesPicked = <String, int>{};
     for (final m in d.medicines) {
       timesPicked[m.name] = (timesPicked[m.name] ?? 0) + 1;
     }
+
+    final byCategory = <String, List<Medicine>>{};
+    for (final m in shown) {
+      byCategory.putIfAbsent(m.category, () => []).add(m);
+    }
+    int rank(String c) {
+      final i = kMedicineCategories.indexOf(c);
+      return i < 0 ? kMedicineCategories.length : i;
+    }
+
+    final categories = byCategory.keys.toList()
+      ..sort((a, b) => rank(a).compareTo(rank(b)));
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -3126,11 +3250,24 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
               Text('${d.medicines.length} added',
                   style: const TextStyle(
                       fontSize: 11.5, color: AppColors.textMuted)),
+            const SizedBox(width: 6),
+            IconButton(
+              key: const ValueKey('medicine_refresh'),
+              onPressed: _refreshMedicines,
+              tooltip: 'Refresh medicine list',
+              icon: const Icon(Icons.refresh_rounded, size: 17),
+              color: AppColors.textMuted,
+              visualDensity: VisualDensity.compact,
+              constraints: const BoxConstraints(),
+              padding: const EdgeInsets.all(4),
+            ),
           ],
         ),
         const SizedBox(height: 4),
         const Text(
-          'Nothing is deducted from stock here. That happens when the visit is completed.',
+          'Nothing is deducted from stock here. That happens when the visit is '
+          'saved. Medicine that expired or ran out is not offered, and the '
+          'batch that expires first is used first.',
           style: TextStyle(
               fontSize: 11.5, color: AppColors.textMuted, height: 1.35),
         ),
@@ -3159,34 +3296,137 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
           _notice(
             AppColors.warning,
             Icons.inventory_2_outlined,
-            'No medicine in stock can be prescribed right now. Archived items and '
-            'anything at zero are not offered.',
+            'No medicine in stock can be prescribed right now. Archived items, '
+            'expired medicine and anything at zero are not offered.',
           )
-        else
-          Wrap(
-            key: const ValueKey('medicine_shelf'),
-            spacing: 7,
-            runSpacing: 7,
-            children: [
-              for (final m in pickable)
-                _optionChip(
-                  label: _medicineChipLabel(m, timesPicked[m.name] ?? 0),
-                  selected: (timesPicked[m.name] ?? 0) > 0,
-                  onTap: () {
-                    _c.addMedicine(d, m);
-                    _autoCompleteIfValid(d);
-                    setState(() {});
-                  },
-                ),
-            ],
+        else ...[
+          TextField(
+            key: const ValueKey('medicine_search'),
+            onChanged: (v) => setState(() => _medQuery = v),
+            style: const TextStyle(fontSize: 12.5, color: AppColors.textMain),
+            decoration: InputDecoration(
+              isDense: true,
+              hintText: 'Search medicine or category',
+              hintStyle:
+                  const TextStyle(fontSize: 12.5, color: AppColors.textMuted),
+              prefixIcon: const Icon(Icons.search_rounded,
+                  size: 18, color: AppColors.textMuted),
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 10, vertical: 11),
+              border: _inputBorder(AppColors.border),
+              enabledBorder: _inputBorder(AppColors.border),
+              focusedBorder: _inputBorder(AppColors.primary, width: 1.5),
+            ),
+          ),
+          if (shown.isEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 12),
+              child: Text(
+                'No medicine matches "${_medQuery.trim()}".',
+                style: const TextStyle(
+                    fontSize: 12, color: AppColors.textMuted),
+              ),
+            )
+          else
+            Column(
+              key: const ValueKey('medicine_shelf'),
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                for (final cat in categories) ...[
+                  Padding(
+                    padding: const EdgeInsets.only(top: 12, bottom: 6),
+                    child: Text(
+                      cat.toUpperCase(),
+                      style: const TextStyle(
+                          fontSize: 10.5,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.6,
+                          color: AppColors.textMuted),
+                    ),
+                  ),
+                  Wrap(
+                    spacing: 7,
+                    runSpacing: 7,
+                    children: [
+                      for (final m in byCategory[cat]!)
+                        _medicineChip(d, m, timesPicked[m.name] ?? 0),
+                    ],
+                  ),
+                ],
+              ],
+            ),
+        ],
+        if (!loading && unavailable.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 12),
+            child: Text(
+              'Not offered: ${unavailable.map((m) => '${m.name} (${m.stock > 0 && m.usableStock <= 0 ? 'expired' : 'out of stock'})').join(', ')}.',
+              style: const TextStyle(
+                  fontSize: 11, color: AppColors.textMuted, height: 1.4),
+            ),
           ),
       ],
     );
   }
 
-  String _medicineChipLabel(Medicine m, int times) {
-    final base = m.stock > 0 ? '${m.name}  ·  ${m.stock}' : m.name;
-    return times > 1 ? '$base  ×$times' : base;
+  Widget _medicineChip(ServiceDraft d, Medicine m, int times) {
+    final selected = times > 0;
+    final soon = _soonestBatch(m);
+    final low = m.isLowStock;
+    final stockText =
+        '${m.usableStock} ${unitWord(m.unit, m.usableStock)}'.trim();
+    return Material(
+      color: selected ? AppColors.primaryContainer : AppColors.surface,
+      borderRadius: BorderRadius.circular(8),
+      child: InkWell(
+        onTap: () {
+          _c.addMedicine(d, m);
+          _autoCompleteIfValid(d);
+          setState(() {});
+        },
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: selected ? AppColors.primary : AppColors.border,
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                times > 1 ? '${m.name}  ×$times' : m.name,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: selected ? FontWeight.w700 : FontWeight.w600,
+                  color: selected ? AppColors.primaryDeep : AppColors.textMain,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                low ? '$stockText · low' : stockText,
+                style: TextStyle(
+                  fontSize: 10.5,
+                  fontWeight: low ? FontWeight.w600 : FontWeight.w500,
+                  color: low ? AppColors.warning : AppColors.textMuted,
+                ),
+              ),
+              if (soon != null)
+                Text(
+                  'Expires ${_batchDate(soon)}',
+                  style: const TextStyle(
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.w600,
+                      color: _kExpiringColor),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   Widget _medicineDosage(ServiceDraft d) {
@@ -3208,8 +3448,40 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
     );
   }
 
+  Widget _miniChip(String label, bool selected, VoidCallback onTap) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(6),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: selected ? AppColors.primaryContainer : AppColors.surface,
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(
+              color: selected ? AppColors.primary : AppColors.border),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 10.5,
+            fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+            color: selected ? AppColors.primaryDeep : AppColors.textSub,
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _medicineRow(ServiceDraft d, MedicineDose m, int index) {
     final over = m.overdraw();
+    final stockMed = _medicineFor(m.medicineId);
+    final soon = stockMed == null ? null : _soonestBatch(stockMed);
+    final unit = m.unit.trim();
+    final qty = m.quantity ?? 0;
+    final deducts = m.action == 'Given' || m.action == 'Partially Given';
+    final left = m.stockAtPick - qty;
+    final nonce = _freqNonce[m] ?? 0;
+
     return Container(
       key: ValueKey('medicine_row/$index'),
       padding: const EdgeInsets.fromLTRB(12, 10, 12, 11),
@@ -3238,7 +3510,8 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
                 ),
               ),
               Text(
-                '${m.stockAtPick} in stock',
+                '${m.stockAtPick} ${unitWord(unit, m.stockAtPick)} in stock'
+                    .replaceAll('  ', ' '),
                 style:
                     const TextStyle(fontSize: 11, color: AppColors.textMuted),
               ),
@@ -3258,15 +3531,36 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
               ),
             ],
           ),
+          if (soon != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Row(
+                children: [
+                  const Icon(Icons.schedule_rounded,
+                      size: 13, color: _kExpiringColor),
+                  const SizedBox(width: 5),
+                  Expanded(
+                    child: Text(
+                      'Earliest batch expires ${_batchDate(soon)} '
+                      '(${_inDays(soon.daysToExpiry)}). It is used first.',
+                      style: const TextStyle(
+                          fontSize: 11, color: _kExpiringColor),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           const SizedBox(height: 9),
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Expanded(
+                flex: 2,
                 child: _inline(
                   'Quantity',
                   initial: '${m.quantity ?? ''}',
                   number: true,
+                  suffix: unit.isEmpty ? null : unitWord(unit, qty),
                   onChanged: (v) {
                     m.quantity = VitalsInterpreter.parse(v)?.toInt();
                     _autoCompleteIfValid(d);
@@ -3274,23 +3568,72 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
                   },
                 ),
               ),
+              const SizedBox(width: 12),
+              Expanded(
+                flex: 3,
+                child: _inline(
+                  'Dose each time',
+                  initial: m.dose,
+                  hint: unit.isEmpty ? 'e.g. 500 mg' : 'e.g. 1 $unit',
+                  onChanged: (v) {
+                    m.dose = v;
+                    _autoCompleteIfValid(d);
+                    setState(() {});
+                  },
+                ),
+              ),
             ],
           ),
+          if (deducts && qty > 0 && over == 0 && m.stockAtPick > 0)
+            Padding(
+              padding: const EdgeInsets.only(top: 5),
+              child: Text(
+                left == 0
+                    ? 'This uses all the stock that is left.'
+                    : '$left ${unitWord(unit, left)} will be left in stock.'
+                        .replaceAll('  ', ' '),
+                style: TextStyle(
+                  fontSize: 11,
+                  color: left == 0 ? AppColors.warning : AppColors.textMuted,
+                ),
+              ),
+            ),
           const SizedBox(height: 9),
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Expanded(
                 flex: 3,
-                child: _inline(
-                  'Frequency',
-                  initial: m.frequency,
-                  hint: 'twice a day',
-                  onChanged: (v) {
-                    m.frequency = v;
-                    _autoCompleteIfValid(d);
-                    setState(() {});
-                  },
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _inline(
+                      'Frequency',
+                      initial: m.frequency,
+                      hint: 'twice a day',
+                      fieldKey: ValueKey('freq/${identityHashCode(m)}/$nonce'),
+                      onChanged: (v) {
+                        m.frequency = v;
+                        _autoCompleteIfValid(d);
+                        setState(() {});
+                      },
+                    ),
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 5,
+                      runSpacing: 5,
+                      children: [
+                        for (final o in _frequencyOptions)
+                          _miniChip(o, m.frequency.trim() == o, () {
+                            m.frequency = o;
+                            _freqNonce[m] = (_freqNonce[m] ?? 0) + 1;
+                            _autoCompleteIfValid(d);
+                            setState(() {});
+                          }),
+                      ],
+                    ),
+                  ],
                 ),
               ),
               const SizedBox(width: 12),
@@ -3373,6 +3716,8 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
     required ValueChanged<String> onChanged,
     bool number = false,
     String hint = '',
+    String? suffix,
+    Key? fieldKey,
   }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -3385,6 +3730,7 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
                 color: AppColors.textSub)),
         const SizedBox(height: 4),
         TextFormField(
+          key: fieldKey,
           initialValue: initial,
           onChanged: onChanged,
           keyboardType: number
@@ -3399,6 +3745,9 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
             hintText: hint.isEmpty ? null : hint,
             hintStyle:
                 const TextStyle(fontSize: 12.5, color: AppColors.textMuted),
+            suffixText: (suffix == null || suffix.isEmpty) ? null : suffix,
+            suffixStyle:
+                const TextStyle(fontSize: 12, color: AppColors.textSub),
             contentPadding:
                 const EdgeInsets.symmetric(horizontal: 10, vertical: 11),
             border: _inputBorder(AppColors.border),
@@ -3504,7 +3853,10 @@ class _ClinicVisitStepThreeState extends State<ClinicVisitStepThree> {
     try {
       final list = await MedicineService.fetchAll();
       if (!mounted) return;
-      setState(() => _medicines = list);
+      setState(() {
+        _medicines = list;
+        _medicinesAt = DateTime.now();
+      });
     } catch (_) {
       if (!mounted) return;
       setState(() => _medicines = const <Medicine>[]);

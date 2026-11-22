@@ -1,38 +1,155 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <!--
-    If you are serving your web app in a path other than the root, change the
-    href value below to reflect the base path you are serving from.
-
-    The path provided below has to start and end with a slash "/" in order for
-    it to work correctly.
-
-    For more details:
-    * https://developer.mozilla.org/en-US/docs/Web/HTML/Element/base
-
-    This is a placeholder for base href that will be replaced by the value of
-    the `--base-href` argument provided to `flutter build`.
-  -->
   <base href="$FLUTTER_BASE_HREF">
 
   <meta charset="UTF-8">
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
-  <meta name="description" content="A new Flutter project.">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="TCGC Clinic Management System">
+  <meta name="theme-color" content="#0F766E">
 
-  <!-- iOS meta tags & icons -->
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
-  <meta name="apple-mobile-web-app-title" content="clinicmanagementsystem">
+  <meta name="apple-mobile-web-app-title" content="TCGC CLINIC">
   <link rel="apple-touch-icon" href="icons/Icon-192.png">
 
-  <!-- Favicon -->
   <link rel="icon" type="image/png" href="favicon.png"/>
 
-<title>TCGC CLINIC MANAGEMENT SYSTEM</title>
+  <title>TCGC CLINIC MANAGEMENT SYSTEM</title>
   <link rel="manifest" href="manifest.json">
+
+  <style>
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: #0F766E;
+    }
+
+    /* Same design as lib/features/auth/screens/splash_screen.dart.
+       It shows instantly and is removed when Flutter draws its first frame. */
+    #boot-splash {
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      background: linear-gradient(135deg, #0D9488, #0F766E, #134E4A);
+      font-family: Inter, Roboto, Arial, sans-serif;
+      color: #ffffff;
+      overflow: hidden;
+    }
+    #boot-splash .sp3 { flex: 3; }
+    #boot-splash .sp2 { flex: 2; }
+    #boot-splash .sp1 { flex: 1; }
+
+    #boot-splash .ring {
+      box-sizing: content-box;
+      padding: 20px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.10);
+      border: 2px solid rgba(255, 255, 255, 0.20);
+      display: flex;
+    }
+    #boot-splash .ring svg { width: 90px; height: 90px; fill: #ffffff; }
+
+    #boot-splash .title {
+      margin-top: 24px;
+      font-size: 34px;
+      font-weight: 900;
+      letter-spacing: 2.5px;
+      line-height: 1.2;
+    }
+    #boot-splash .subtitle {
+      font-size: 16px;
+      font-weight: 500;
+      letter-spacing: 1.2px;
+      color: #CCFBF1;
+      line-height: 1.4;
+    }
+
+    #boot-splash .spin {
+      width: 36px;
+      height: 36px;
+      box-sizing: border-box;
+      border-radius: 50%;
+      border: 3px solid rgba(255, 255, 255, 0.25);
+      border-top-color: #ffffff;
+      animation: boot-spin 1s linear infinite;
+    }
+    @keyframes boot-spin { to { transform: rotate(360deg); } }
+
+    #boot-splash .powered {
+      font-size: 10px;
+      color: rgba(255, 255, 255, 0.5);
+      margin-bottom: 15px;
+    }
+    #boot-splash .logos {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    #boot-splash .logo {
+      width: 40px;
+      height: 40px;
+      box-sizing: border-box;
+      padding: 5px;
+      border-radius: 50%;
+      background: #ffffff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    #boot-splash .logo img { width: 100%; height: 100%; object-fit: contain; }
+    #boot-splash .divider {
+      width: 1px;
+      height: 25px;
+      margin: 0 15px;
+      background: rgba(255, 255, 255, 0.20);
+    }
+    #boot-splash .college {
+      margin: 15px 0 30px;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+    }
+  </style>
 </head>
 <body>
+  <div id="boot-splash">
+    <div class="sp3"></div>
+
+    <div class="ring">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path fill-rule="evenodd"
+          d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm4 11h-3v3h-2v-3H8v-2h3V7h2v3h3v2z"/>
+      </svg>
+    </div>
+    <div class="title">TCGC CLINIC</div>
+    <div class="subtitle">Management System</div>
+
+    <div class="sp1"></div>
+    <div class="spin"></div>
+    <div class="sp2"></div>
+
+    <div class="powered">Powered by</div>
+    <div class="logos">
+      <div class="logo"><img src="assets/asset/tcgc.png" alt="" onerror="this.style.display='none'"></div>
+      <div class="divider"></div>
+      <div class="logo"><img src="assets/asset/cliniclogo.png" alt="" onerror="this.style.display='none'"></div>
+    </div>
+    <div class="college">Tangub City Global College</div>
+  </div>
+
+  <script>
+    // Flutter's own splash page looks identical, so removing this is seamless.
+    window.addEventListener('flutter-first-frame', function () {
+      var el = document.getElementById('boot-splash');
+      if (el) el.remove();
+    });
+  </script>
+
   <script src="flutter_bootstrap.js" async></script>
 </body>
 </html>

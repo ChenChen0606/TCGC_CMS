@@ -171,7 +171,9 @@ class _ClinicDashboardState extends State<ClinicDashboard> {
               color: Color(0x0A0F172A), blurRadius: 16, offset: Offset(2, 0)),
         ],
       ),
-      child: Column(
+      child: Material(
+        type: MaterialType.transparency,
+        child: Column(
         children: [
           _buildSidebarHeader(),
           const SizedBox(height: 10),
@@ -207,6 +209,7 @@ class _ClinicDashboardState extends State<ClinicDashboard> {
           _buildUserFooter(),
           const SizedBox(height: 20),
         ],
+      ),
       ),
     );
   }
@@ -362,7 +365,7 @@ class _ClinicDashboardState extends State<ClinicDashboard> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text(widget.userName.isEmpty ? 'User' : widget.userName,
+                  Text(_currentName.isEmpty ? 'User' : _currentName,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(

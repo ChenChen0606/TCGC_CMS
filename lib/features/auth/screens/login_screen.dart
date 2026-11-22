@@ -1,16 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:clinicmanagementsystem/features/dashboard/screens/clinic_dashboard_screen.dart';
-import 'package:clinicmanagementsystem/features/auth/screens/force_password_change_screen.dart';
 import 'package:clinicmanagementsystem/core/theme/app_colors.dart';
 import 'package:clinicmanagementsystem/core/config/supabase_config.dart';
 import 'package:clinicmanagementsystem/features/account/services/account_service.dart';
-import 'package:clinicmanagementsystem/core/services/reference_data_service.dart';
 import 'package:clinicmanagementsystem/core/services/app_warmup.dart';
 import 'package:clinicmanagementsystem/core/platform/browser_tabs.dart';
 import 'package:clinicmanagementsystem/features/auth/recovery_state.dart';
 import 'package:clinicmanagementsystem/features/auth/widgets/forgot_password_dialog.dart';
 import 'package:clinicmanagementsystem/features/auth/screens/reset_password_screen.dart';
+import 'package:clinicmanagementsystem/features/auth/screens/splash_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -136,78 +134,22 @@ void dispose() {
       return;
     }
 
-    Map<String, dynamic>? accountRow;
-    try {
-      accountRow = await supabaseClient
-          .from('useraccount')
-          .select()
-          .eq('user_id', authUser.id)
-          .maybeSingle();
-    } catch (e) {
-      debugPrint('LOGIN: useraccount fetch failed: $e');
-    }
-
-    final isActive = accountRow != null && accountRow['is_active'] is bool
-        ? accountRow['is_active'] as bool
-        : _metaIsActive(authUser);
-
-    if (!isActive) {
-      await supabaseClient.auth.signOut();
-      if (!mounted) return;
+    final session = await AccountService.openSession(authUser);
+    if (!mounted) return;
+    if (session == null) {
       setState(() => _error =
           'Your account has been deactivated. Please contact the Clinic Head.');
       return;
     }
 
-    await ReferenceCatalog.loadAfterSignIn();
-
-    // Start downloading the dashboard, Clinic Visit and Individual Record
-    // data now (not awaited) so those screens open without a loading wait.
+    // Warm-up runs in the background; nothing here waits for it, so the
+    // dashboard opens as soon as the password is accepted.
     AppWarmup.start();
-
-    final profile = accountRow != null
-        ? AppProfile.fromSupabase(accountRow)
-            .withNamesFrom(AccountService.profileFromAuthUser(authUser))
-        : AccountService.profileFromAuthUser(authUser);
-
-    final role = profile.role;
-    final userEmail = authUser.email ?? '';
-    final userUsername = profile.username.isNotEmpty
-        ? profile.username
-        : AccountService.usernameFromAuthEmail(authUser.email);
-    final userName =
-        profile.displayName.isNotEmpty ? profile.displayName : userUsername;
-    final forceChange = profile.mustChangePassword;
-
-    if (!mounted) return;
-
     resetTabHistory();
-
-    if (forceChange) {
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(
-          builder: (_) => ForcePasswordChangeScreen(
-            userRole: role,
-            userEmail: userEmail,
-            userName: userName,
-            userUsername: userUsername,
-          ),
-        ),
-      );
-      return;
-    }
 
     Navigator.pushReplacement(
       context,
-      MaterialPageRoute(
-        builder: (_) => ClinicDashboard(
-          userRole: role,
-          userEmail: userEmail,
-          userName: userName,
-          userUsername: userUsername,
-        ),
-      ),
+      MaterialPageRoute(builder: (_) => homeScreenFor(session)),
     );
     } on AuthException catch (e) {
       debugPrint('AUTH ERROR: status=${e.statusCode} message=${e.message}');
@@ -253,13 +195,6 @@ void dispose() {
       if (mounted) setState(() => _submitting = false);
     }
 }
-
-  bool _metaIsActive(User user) {
-    final raw = AccountService.metadataOf(user)['is_active'];
-    if (raw is bool) return raw;
-    if (raw is String) return raw.toLowerCase() != 'false';
-    return true;
-  }
 
   @override
   Widget build(BuildContext context) {

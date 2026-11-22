@@ -9,10 +9,10 @@ import 'package:clinicmanagementsystem/core/theme/app_colors.dart';
 import 'package:clinicmanagementsystem/core/config/supabase_config.dart';
 import 'package:clinicmanagementsystem/core/services/reference_data_service.dart';
 import 'package:clinicmanagementsystem/core/services/data_tracker.dart';
+import 'package:clinicmanagementsystem/core/services/profile_state.dart';
 import 'package:clinicmanagementsystem/core/platform/browser_tabs.dart';
 
 Future<void> main() async {
-  WidgetsFlutterBinding.ensureInitialized();
   WidgetsFlutterBinding.ensureInitialized();
   configureUrlStrategy(); // /reports instead of /#reports
   // Capture the URL before anything can rewrite it.
@@ -97,9 +97,10 @@ Future<void> main() async {
 
   supabaseClient.auth.onAuthStateChange.listen((event) {
     if (event.session == null) {
-      // Signed out: forget every cached list so the next user never sees
-      // the previous user's data.
+      // Signed out: forget every cached list and the shared name so the
+      // next user never sees the previous user's data.
       DataTracker.invalidateAll();
+      ProfileState.clear();
       return;
     }
     ReferenceCatalog.loadAfterSignIn();

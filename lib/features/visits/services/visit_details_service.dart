@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:clinicmanagementsystem/core/services/data_tracker.dart';
 import 'package:clinicmanagementsystem/features/visits/services/service_detail_records.dart';
 import 'package:clinicmanagementsystem/core/config/supabase_config.dart';
+import 'package:clinicmanagementsystem/features/inventory/services/medicine_service.dart';
 
 const Map<String, String> _serviceCodeByDartId = {
   'bpi': 'BMI',
@@ -357,7 +358,7 @@ class VisitDetailsService {
       items = await supabaseClient
           .from('medication_service_items')
           .select('medication_service_id, medicine_id, quantity, '
-              'frequency, action, response, notes')
+              'dose, unit, frequency, action, response, notes')
           .inFilter('medication_service_id', serviceIds);
     } catch (_) {
       return out;
@@ -368,14 +369,21 @@ class VisitDetailsService {
         if ((it['medicine_id'] as num?)?.toInt() case final int id) id,
     };
     final names = <int, String>{};
+    final usable = <int, int>{};
+    final units = <int, String>{};
     if (medicineIds.isNotEmpty) {
       try {
         final meds = await supabaseClient
             .from('medicines')
-            .select('id, name')
+            .select('id, name, stock, unit, '
+                'medicine_batches(id, medicine_id, quantity, expiry_date)')
             .inFilter('id', medicineIds.toList());
         for (final m in meds) {
-          names[(m['id'] as num?)?.toInt() ?? 0] = '${m['name'] ?? ''}';
+          final med = Medicine.fromSupabase(Map<String, dynamic>.from(m));
+          final id = med.id ?? 0;
+          names[id] = med.name;
+          usable[id] = med.usableStock;
+          units[id] = med.unit;
         }
       } catch (_) {}
     }
@@ -384,10 +392,19 @@ class VisitDetailsService {
       final visitId = serviceVisit['${it['medication_service_id'] ?? ''}'];
       if (visitId == null) continue;
       final medicineId = (it['medicine_id'] as num?)?.toInt();
+      final qty = (it['quantity'] as num?)?.toInt();
+      // What this record already took is no longer on the shelf, so add it
+      // back: otherwise editing a saved visit would look like an overdraw.
+      final already = _deductsStock('${it['action'] ?? ''}') ? (qty ?? 0) : 0;
       out[visitId]!.add(MedicineDose(
         medicineId: medicineId,
         name: names[medicineId] ?? '',
-        quantity: (it['quantity'] as num?)?.toInt(),
+        stockAtPick: (usable[medicineId] ?? 0) + already,
+        quantity: qty,
+        unit: '${it['unit'] ?? ''}'.trim().isNotEmpty
+            ? '${it['unit']}'.trim()
+            : (units[medicineId] ?? ''),
+        dose: '${it['dose'] ?? ''}',
         frequency: '${it['frequency'] ?? ''}',
         action: '${it['action'] ?? ''}',
         response: '${it['response'] ?? ''}',
@@ -589,24 +606,6 @@ class VisitDetailsService {
       return 'Medication: the medication record could not be saved.';
     }
 
-    final previously = <int, int>{};
-    try {
-      final oldItems = await supabaseClient
-          .from('medication_service_items')
-          .select('medicine_id, quantity, action')
-          .eq('medication_service_id', headerId);
-      for (final o in oldItems) {
-        final id = (o['medicine_id'] as num?)?.toInt();
-        if (id == null || !_deductsStock('${o['action'] ?? ''}')) continue;
-        previously[id] =
-            (previously[id] ?? 0) + ((o['quantity'] as num?)?.toInt() ?? 0);
-      }
-    } catch (e) {
-      // Without the old items the stock change cannot be worked out safely.
-      debugPrint('visit details: medication old items failed: $e');
-      return 'Medication: the earlier medicines could not be read.';
-    }
-
     final now = <int, int>{};
     for (final m in rows) {
       if (!_deductsStock(m.action)) continue;
@@ -625,6 +624,8 @@ class VisitDetailsService {
               'medication_service_id': headerId,
               'medicine_id': m.medicineId,
               'quantity': m.quantity ?? 0,
+              'dose': m.dose.trim().isEmpty ? null : m.dose.trim(),
+              'unit': m.unit.trim().isEmpty ? null : m.unit.trim(),
               'frequency':
                   m.frequency.trim().isEmpty ? null : m.frequency.trim(),
               'action': m.action.trim().isEmpty ? null : m.action.trim(),
@@ -639,28 +640,28 @@ class VisitDetailsService {
       return 'Medication: the medicines could not be saved.';
     }
 
-    var stockFailed = false;
-    for (final id in {...previously.keys, ...now.keys}) {
-      final delta = (now[id] ?? 0) - (previously[id] ?? 0);
-      if (delta == 0) continue;
-      try {
-        final row = await supabaseClient
-            .from('medicines')
-            .select('id, stock')
-            .eq('id', id)
-            .maybeSingle();
-        if (row == null) continue;
-        final current = (row['stock'] as num?)?.toInt() ?? 0;
-        final target = current - delta < 0 ? 0 : current - delta;
-        await supabaseClient
-            .from('medicines')
-            .update({'stock': target}).eq('id', id);
-      } catch (e) {
-        debugPrint('visit details: stock update failed: $e');
-        stockFailed = true;
+    // Stock: one database call. It gives out from the batch that expires
+    // first (never an expired one), remembers which batch each unit came
+    // from, and only moves the DIFFERENCE from what this record already
+    // took - so saving the same visit twice never deducts twice.
+    try {
+      await supabaseClient.rpc('sync_medication_stock', params: {
+        'p_header': headerId,
+        'p_items': [
+          for (final e in now.entries)
+            if (e.value > 0) {'medicine_id': e.key, 'quantity': e.value},
+        ],
+      });
+    } catch (e) {
+      debugPrint('visit details: stock update failed: $e');
+      final short = RegExp(r'Not enough usable stock for .*? needed\.')
+          .firstMatch(e.toString())
+          ?.group(0);
+      if (short != null) {
+        return 'Medication: the medicines were saved, but $short '
+            'Expired medicine is never given out. Restock it or lower the '
+            'quantity, then save again.';
       }
-    }
-    if (stockFailed) {
       return 'Medication: the medicines were saved but the clinic stock could '
           'not be updated.';
     }
@@ -728,36 +729,12 @@ class VisitDetailsService {
       return;
     }
 
-    final taken = <int, int>{};
+    // Puts back everything this record gave out, into the same batches.
     try {
-      final items = await supabaseClient
-          .from('medication_service_items')
-          .select('medicine_id, quantity, action')
-          .eq('medication_service_id', headerId);
-      for (final it in items) {
-        if (!_deductsStock('${it['action'] ?? ''}')) continue;
-        final id = (it['medicine_id'] as num?)?.toInt();
-        if (id == null) continue;
-        taken[id] = (taken[id] ?? 0) + ((it['quantity'] as num?)?.toInt() ?? 0);
-      }
-    } catch (_) {
-      return;
-    }
-
-    for (final e in taken.entries) {
-      if (e.value <= 0) continue;
-      try {
-        final row = await supabaseClient
-            .from('medicines')
-            .select('id, stock')
-            .eq('id', e.key)
-            .maybeSingle();
-        if (row == null) continue;
-        final current = (row['stock'] as num?)?.toInt() ?? 0;
-        await supabaseClient
-            .from('medicines')
-            .update({'stock': current + e.value}).eq('id', e.key);
-      } catch (_) {}
+      await supabaseClient
+          .rpc('release_medication_stock', params: {'p_header': headerId});
+    } catch (e) {
+      debugPrint('visit details: returning stock failed: $e');
     }
   }
 

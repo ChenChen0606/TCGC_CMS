@@ -779,18 +779,17 @@ class _AccountScreenState extends State<AccountScreen> {
                         submitting = true;
                       });
                       try {
-                        await AccountService.updateOwnProfile(
+                        final updated = await AccountService.updateOwnProfile(
                           firstName: newFirst,
                           middleName: mnCtrl.text,
                           lastName: newLast,
                         );
-                        Navigator.pop(ctx);
+                        if (ctx.mounted) Navigator.pop(ctx);
+                        if (!mounted) return;
 
-                        setState(() {
-                          _displayName = [newFirst, mnCtrl.text.trim(), newLast]
-                              .where((s) => s.isNotEmpty)
-                              .join(' ');
-                        });
+                        // The dashboard and sidebar follow ProfileState,
+                        // which updateOwnProfile already refreshed.
+                        setState(() => _displayName = updated.displayName);
                         _refresh();
                         _toast('Personal info updated successfully.');
                       } on AuthException catch (e) {

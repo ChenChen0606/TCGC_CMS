@@ -17,11 +17,25 @@ enum ServiceDraftStatus {
   final String label;
 }
 
+/// "tablet" + 5 -> "tablets", "tablet" + 1 -> "tablet", "ml" stays "ml".
+String unitWord(String unit, num qty) {
+  final u = unit.trim();
+  if (u.isEmpty) return '';
+  if (qty == 1) return u;
+  const fixed = {'ml', 'pcs', 'mg', 'g'};
+  if (fixed.contains(u.toLowerCase()) || u.toLowerCase().endsWith('s')) {
+    return u;
+  }
+  return '${u}s';
+}
+
 class MedicineDose {
   MedicineDose({
     this.medicineId,
     this.name = '',
     this.quantity,
+    this.unit = '',
+    this.dose = '',
     this.frequency = '',
     this.action = 'Given',
     this.response = '',
@@ -33,6 +47,12 @@ class MedicineDose {
   final int? medicineId;
   String name;
   int? quantity;
+
+  /// tablet, capsule, ml ... copied from the inventory when picked.
+  String unit;
+
+  /// How much is taken each time, e.g. "1 tablet" or "500 mg".
+  String dose;
   String frequency;
   String action;
   String response;
@@ -61,6 +81,9 @@ class MedicineDose {
         'medicine_id': medicineId,
         'name': name,
         'quantity': quantity,
+        'unit': unit,
+        'dose': dose,
+        'stock_at_pick': stockAtPick,
         'frequency': frequency,
         'action': action,
         'response': response,
@@ -72,6 +95,8 @@ class MedicineDose {
         medicineId: (j['medicine_id'] as num?)?.toInt(),
         name: '${j['name'] ?? ''}',
         quantity: (j['quantity'] as num?)?.toInt(),
+        unit: '${j['unit'] ?? ''}',
+        dose: '${j['dose'] ?? ''}',
         frequency: '${j['frequency'] ?? ''}',
         action: '${j['action'] ?? ''}',
         response: '${j['response'] ?? ''}',
@@ -84,7 +109,12 @@ class MedicineDose {
 
   String get detail {
     final parts = <String>[];
-    if ((quantity ?? 0) > 0) parts.add('Quantity: $quantity');
+    if ((quantity ?? 0) > 0) {
+      final u = unitWord(unit, quantity!);
+      parts.add('Quantity: $quantity${u.isEmpty ? '' : ' $u'}');
+    }
+    final ds = dose.trim();
+    if (ds.isNotEmpty) parts.add('Dose: $ds');
     final f = frequency.trim();
     if (f.isNotEmpty) parts.add('Frequency: $f');
     final a = action.trim();
@@ -896,7 +926,8 @@ class VisitDetailsController extends ChangeNotifier {
       d.medicines.add(MedicineDose(
         medicineId: m.id,
         name: m.name,
-        stockAtPick: m.stock,
+        unit: m.unit,
+        stockAtPick: m.usableStock,
         quantity: 1,
       ));
     }
@@ -912,7 +943,8 @@ class VisitDetailsController extends ChangeNotifier {
     notifyListeners();
   }
 
-  static bool canPick(Medicine m) => !m.isArchived && m.stock > 0;
+  /// Only medicine that is in stock AND not expired can be picked.
+  static bool canPick(Medicine m) => !m.isArchived && m.canDispense;
 
   void markSaved([String? serviceId]) {
     for (final d in _drafts) {
