@@ -11,7 +11,8 @@ import 'package:printing/printing.dart';
 import 'package:clinicmanagementsystem/features/records/services/booklet_print.dart';
 import 'package:clinicmanagementsystem/shared/printing/html_print.dart';
 import 'package:clinicmanagementsystem/shared/printing/html_sheet.dart';
-import 'package:clinicmanagementsystem/features/vitals/models/vitals.dart';
+// WhoBmi + BmiLabel (adjust the path if who_bmi.dart lives elsewhere)
+import 'package:clinicmanagementsystem/features/vitals/models/who_bmi.dart';
 import 'package:clinicmanagementsystem/core/services/data_tracker.dart';
 import 'package:clinicmanagementsystem/core/services/reference_data_service.dart';
 import 'package:clinicmanagementsystem/core/config/supabase_config.dart';
@@ -144,16 +145,24 @@ class BmiRecord {
     return w / (m * m);
   }
 
+  /// WHO classification: adults 19+ use the fixed cut-offs (with obese
+  /// classes), ages 5-18 use the WHO BMI-for-age z-score. 'Unknown' when the
+  /// birth date / sex is missing or the person is under 5.
   String get indicator {
     final value = computedBmi;
-    if (!value.isFinite) return 'Unknown';
-    final b = VitalsThresholds.resolve(VitalsThresholds.instance.bmi, value);
-    return b.label.isEmpty ? 'Unknown' : b.label;
+    final birth = dateOfBirth;
+    if (!value.isFinite || birth == null) return 'Unknown';
+    final c = WhoBmi.classify(
+      bmi: value,
+      sex: sex,
+      birthDate: birth,
+      asOf: visitDate ?? DateTime.now(),
+    );
+    return c?.label ?? 'Unknown';
   }
 
   String get fullName {
-    final given =
-        <String>[fn, mn, suffix].where((p) => p.isNotEmpty).join(' ');
+    final given = <String>[fn, mn, suffix].where((p) => p.isNotEmpty).join(' ');
     if (ln.isEmpty) return given;
     return given.isEmpty ? ln : '$ln, $given';
   }
@@ -169,23 +178,18 @@ class BmiRecord {
 }
 
 /// One row of a summary table. [sub] is the second label column
-/// (Position) used by the Faculty & Staff summary.
+/// (Position) used by the Faculty & Staff summary. [counts] maps every
+/// BmiLabel to its number of people.
 class BmiSummaryRow {
   final String label;
   final String sub;
-  final int underweight;
-  final int normal;
-  final int overweight;
-  final int obese;
+  final Map<String, int> counts;
   final int total;
 
   const BmiSummaryRow({
     required this.label,
     this.sub = '',
-    required this.underweight,
-    required this.normal,
-    required this.overweight,
-    required this.obese,
+    required this.counts,
     required this.total,
   });
 }
@@ -198,6 +202,15 @@ class _SummaryBlock {
   final String first;
   final String? second;
   final List<BmiSummaryRow> rows;
+
+  /// Columns to show. Plain 'Obese' (ages 5-18) only appears if someone has it.
+  List<String> get indicators {
+    final childObese = rows.any((s) => (s.counts[BmiLabel.obese] ?? 0) > 0);
+    return [
+      for (final c in BmiLabel.all)
+        if (c != BmiLabel.obese || childObese) c,
+    ];
+  }
 }
 
 class BmiRecordsScreen extends StatefulWidget {
@@ -219,6 +232,18 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
   static const Color kBg = AppColors.bgAlt;
 
   static const PdfColor _sheetGreen = PdfColor.fromInt(0xFF0E6B47);
+
+  /// Background / text colour of every BMI label (0xAARRGGBB).
+  static const Map<String, (int, int)> _indicatorInk = {
+    BmiLabel.severelyUnderweight: (0xFFDBEAFE, 0xFF1D4ED8),
+    BmiLabel.underweight: (0xFFE0F2FE, 0xFF0369A1),
+    BmiLabel.normal: (0xFFDCFCE7, 0xFF15803D),
+    BmiLabel.overweight: (0xFFFEF3C7, 0xFFB45309),
+    BmiLabel.obese: (0xFFFEE2E2, 0xFFB91C1C),
+    BmiLabel.obeseI: (0xFFFEE2E2, 0xFFB91C1C),
+    BmiLabel.obeseII: (0xFFFECACA, 0xFF991B1B),
+    BmiLabel.obeseIII: (0xFFFCA5A5, 0xFF7F1D1D),
+  };
 
   /// Record groups: students, and faculty + staff combined.
   static const List<String> _groups = ['Student', 'Employee'];
@@ -330,8 +355,7 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
     final codeByName = <String, String>{};
     final instNames = <String>{};
     try {
-      final rows =
-          await supabaseClient.from('institutes').select('code, name');
+      final rows = await supabaseClient.from('institutes').select('code, name');
       for (final row in (rows as List)) {
         final m = Map<String, dynamic>.from(row as Map);
         final code = (m['code'] as String?)?.trim() ?? '';
@@ -626,6 +650,50 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
     return inst.isNotEmpty ? inst : office;
   }
 
+  // ── BMI label helpers (colours, icons, counting) ───────────────────────
+
+  /// (background, text) colour of a BMI label.
+  (Color, Color) _inkOf(String label) {
+    final t = _indicatorInk[label];
+    return t == null
+        ? (const Color(0xFFF1F5F9), const Color(0xFF64748B))
+        : (Color(t.$1), Color(t.$2));
+  }
+
+  /// '#RRGGBB' for the HTML print.
+  String _hex(int argb) =>
+      '#${(argb & 0xFFFFFF).toRadixString(16).padLeft(6, '0').toUpperCase()}';
+
+  IconData _iconOf(String c) => switch (c) {
+        BmiLabel.severelyUnderweight ||
+        BmiLabel.underweight =>
+          Icons.trending_down_rounded,
+        BmiLabel.normal => Icons.check_circle_rounded,
+        BmiLabel.overweight => Icons.trending_up_rounded,
+        _ => Icons.warning_amber_rounded,
+      };
+
+  Map<String, int> _countByIndicator(List<BmiRecord> l) {
+    final m = {for (final c in BmiLabel.all) c: 0};
+    for (final r in l) {
+      final i = r.indicator;
+      if (m.containsKey(i)) m[i] = m[i]! + 1;
+    }
+    return m;
+  }
+
+  /// The labels to show as cards / chips. Plain 'Obese' (ages 5-18) is
+  /// hidden unless someone has it (or it is the selected filter).
+  List<String> _shownIndicators(Map<String, int> counts) => [
+        for (final c in BmiLabel.all)
+          if (c != BmiLabel.obese ||
+              (counts[c] ?? 0) > 0 ||
+              c == _selectedClassification)
+            c,
+      ];
+
+  // ── Summaries ──────────────────────────────────────────────────────────
+
   List<BmiSummaryRow> _summarize(
       List<BmiRecord> records, String Function(BmiRecord) keyOf) {
     final groups = <String, List<BmiRecord>>{};
@@ -658,14 +726,10 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
   }
 
   BmiSummaryRow _summaryRowOf(String label, String sub, List<BmiRecord> l) {
-    int c(String s) => l.where((r) => r.indicator == s).length;
     return BmiSummaryRow(
       label: label,
       sub: sub,
-      underweight: c('Underweight'),
-      normal: c('Normal'),
-      overweight: c('Overweight'),
-      obese: c('Obese'),
+      counts: _countByIndicator(l),
       total: l.length,
     );
   }
@@ -702,55 +766,42 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
   // ── Summary table helpers (indicator-aware) ────────────────────────────
 
   List<String> _summaryHeaders(String first,
-          {required bool withTotal, String? second}) =>
+          {required bool withTotal,
+          String? second,
+          required List<String> indicators}) =>
       [
         first,
         if (second != null) second,
-        if (_singleIndicator)
-          _selectedClassification
-        else ...[
-          'Underweight',
-          'Normal',
-          'Overweight',
-          'Obese',
-        ],
+        if (_singleIndicator) _selectedClassification else ...indicators,
         if (withTotal && !_singleIndicator) 'Total',
       ];
 
   List<String> _summaryCells(
     String name,
-    int underweight,
-    int normal,
-    int overweight,
-    int obese,
-    int total, {
+    Map<String, int> counts,
+    int total,
+    List<String> indicators, {
     required bool withTotal,
     String? sub,
   }) {
     if (_singleIndicator) {
-      final v = switch (_selectedClassification) {
-        'Underweight' => underweight,
-        'Normal' => normal,
-        'Overweight' => overweight,
-        _ => obese,
-      };
-      return [name, if (sub != null) sub, '$v'];
+      return [
+        name,
+        if (sub != null) sub,
+        '${counts[_selectedClassification] ?? 0}',
+      ];
     }
     return [
       name,
       if (sub != null) sub,
-      '$underweight',
-      '$normal',
-      '$overweight',
-      '$obese',
+      for (final c in indicators) '${counts[c] ?? 0}',
       if (withTotal) '$total',
     ];
   }
 
   List<String> _blockCells(_SummaryBlock b, BmiSummaryRow s,
           {required bool withTotal}) =>
-      _summaryCells(s.label, s.underweight, s.normal, s.overweight, s.obese,
-          s.total,
+      _summaryCells(s.label, s.counts, s.total, b.indicators,
           withTotal: withTotal, sub: b.second == null ? null : s.sub);
 
   // ── Detail table columns ───────────────────────────────────────────────
@@ -834,9 +885,10 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
         ];
 
   /// Column widths for the numbered details table (first value = NO. column).
+  /// The last column is wide enough for "Severely Underweight".
   List<double> _printDetailFlex(String g) => g == 'Student'
-      ? [.45, 2.6, .55, .5, 1.1, 1.2, 1.0, .8, .8, .7, 1.2]
-      : [.45, 2.8, 2.0, .55, .5, 1.1, .7, 1.3];
+      ? [.45, 2.6, .55, .5, 1.1, 1.2, 1.0, .8, .8, .7, 1.7]
+      : [.45, 2.8, 2.0, .55, .5, 1.1, .7, 1.8];
 
   List<String> _printDetailCells(String g, BmiRecord r) {
     if (g == 'Student') {
@@ -902,8 +954,7 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
   }
 
   bool _hasRecordsFor(String year, [String? sem]) => _allRecords.any((r) =>
-      r.acadYear == year &&
-      (sem == null || sem == 'All' || r.semester == sem));
+      r.acadYear == year && (sem == null || sem == 'All' || r.semester == sem));
 
   /// Ages found in the records that match every filter EXCEPT the age
   /// filter itself. So "Today" lists only the ages seen today, and "All"
@@ -1055,71 +1106,42 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
     );
   }
 
+  /// Total card + one card per BMI label, always on ONE row. The cards share
+  /// the width equally and switch to a compact (stacked) layout when the
+  /// screen gets narrow, so nothing drops to a second line.
   Widget _statStrip() {
     final records = _filteredRecords;
-    final total = records.length;
-    int count(String c) => records.where((r) => r.indicator == c).length;
+    final counts = _countByIndicator(records);
     final stats = <({String label, int value, Color color, IconData icon})>[
       (
         label: _totalLabel,
-        value: total,
+        value: records.length,
         color: kPrimary,
         icon: Icons.groups_rounded
       ),
-      (
-        label: 'Underweight',
-        value: count('Underweight'),
-        color: const Color(0xFF0369A1),
-        icon: Icons.trending_down_rounded
-      ),
-      (
-        label: 'Normal',
-        value: count('Normal'),
-        color: const Color(0xFF15803D),
-        icon: Icons.check_circle_rounded
-      ),
-      (
-        label: 'Overweight',
-        value: count('Overweight'),
-        color: const Color(0xFFB45309),
-        icon: Icons.trending_up_rounded
-      ),
-      (
-        label: 'Obese',
-        value: count('Obese'),
-        color: const Color(0xFFB91C1C),
-        icon: Icons.warning_amber_rounded
-      ),
+      for (final c in _shownIndicators(counts))
+        (
+          label: c,
+          value: counts[c] ?? 0,
+          color: _inkOf(c).$2,
+          icon: _iconOf(c)
+        ),
     ];
     return LayoutBuilder(builder: (context, constraints) {
-      if (constraints.maxWidth < 620) {
-        return Wrap(
-          spacing: 10,
-          runSpacing: 10,
-          children: [
-            for (final s in stats)
-              SizedBox(
-                width: (constraints.maxWidth - 10) / 2,
-                child: _statCard(
-                  label: s.label,
-                  value: s.value,
-                  color: s.color,
-                  icon: s.icon,
-                ),
-              ),
-          ],
-        );
-      }
+      const gap = 8.0;
+      final n = stats.length;
+      final cardW = (constraints.maxWidth - gap * (n - 1)) / n;
       return Row(
         children: [
-          for (var i = 0; i < stats.length; i++) ...[
-            if (i > 0) const SizedBox(width: 12),
+          for (var i = 0; i < n; i++) ...[
+            if (i > 0) const SizedBox(width: gap),
             Expanded(
               child: _statCard(
                 label: stats[i].label,
                 value: stats[i].value,
                 color: stats[i].color,
                 icon: stats[i].icon,
+                cardWidth: cardW,
               ),
             ),
           ],
@@ -1133,9 +1155,37 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
     required int value,
     required Color color,
     required IconData icon,
+    required double cardWidth,
   }) {
+    // Roomy card: icon on the left. Tight card: number over label, no icon.
+    final wide = cardWidth >= 175;
+    final tight = cardWidth < 110;
+
+    final number = FittedBox(
+      fit: BoxFit.scaleDown,
+      alignment: wide ? Alignment.centerLeft : Alignment.center,
+      child: Text('$value',
+          maxLines: 1,
+          style: TextStyle(
+              fontSize: tight ? 18 : 22,
+              fontWeight: FontWeight.w900,
+              color: kTextMain)),
+    );
+    final caption = FittedBox(
+      fit: BoxFit.scaleDown,
+      alignment: wide ? Alignment.centerLeft : Alignment.center,
+      child: Text(label,
+          maxLines: 1,
+          softWrap: false,
+          style: TextStyle(
+              fontSize: tight ? 10.5 : 11.5,
+              fontWeight: FontWeight.w600,
+              color: kTextSub)),
+    );
+
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+      padding: EdgeInsets.symmetric(
+          horizontal: wide ? 14 : 8, vertical: wide ? 14 : 12),
       decoration: BoxDecoration(
         color: kCard,
         borderRadius: BorderRadius.circular(16),
@@ -1145,41 +1195,36 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
               color: Color(0x0A0F172A), blurRadius: 16, offset: Offset(0, 6)),
         ],
       ),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(9),
-            decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.10),
-              borderRadius: BorderRadius.circular(11),
-            ),
-            child: Icon(icon, color: color, size: 20),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+      child: wide
+          ? Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(9),
+                  decoration: BoxDecoration(
+                    color: color.withValues(alpha: 0.10),
+                    borderRadius: BorderRadius.circular(11),
+                  ),
+                  child: Icon(icon, color: color, size: 20),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [number, caption],
+                  ),
+                ),
+              ],
+            )
+          : Column(
+              mainAxisAlignment: MainAxisAlignment.center,
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text('$value',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.w900,
-                        color: kTextMain)),
-                Text(label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                        fontSize: 11.5,
-                        fontWeight: FontWeight.w600,
-                        color: kTextSub)),
+                number,
+                const SizedBox(height: 2),
+                caption,
               ],
             ),
-          ),
-        ],
-      ),
     );
   }
 
@@ -1378,7 +1423,7 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
   Widget _indicatorFilter() => _pillDropdown(
         icon: Icons.monitor_weight_outlined,
         value: _selectedClassification,
-        options: const ['All', 'Underweight', 'Normal', 'Overweight', 'Obese'],
+        options: const ['All', ...BmiLabel.all],
         labelFor: (o) => o == 'All' ? 'All BMI' : o,
         onChanged: (v) => setState(() {
           _selectedClassification = v;
@@ -1857,8 +1902,8 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
                   : Icons.apartment_rounded),
           const SizedBox(height: 10),
           _summaryTable(
-            headers:
-                _summaryHeaders(b.first, withTotal: true, second: b.second),
+            headers: _summaryHeaders(b.first,
+                withTotal: true, second: b.second, indicators: b.indicators),
             rows: [
               for (final s in b.rows) _blockCells(b, s, withTotal: true),
             ],
@@ -2022,8 +2067,7 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
               horizontalInside: BorderSide(color: kBorder, width: 0.8),
             ),
             columns: [
-              for (final h in _detailHeaders(group))
-                DataColumn(label: Text(h)),
+              for (final h in _detailHeaders(group)) DataColumn(label: Text(h)),
             ],
             rows: [
               for (final (i, r) in recs.indexed)
@@ -2050,13 +2094,7 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
       d == null ? '—' : DateFormat('MMM d, yyyy').format(d);
 
   Widget _indicatorPill(String indicator) {
-    final (bg, fg) = switch (indicator) {
-      'Underweight' => (const Color(0xFFE0F2FE), const Color(0xFF0369A1)),
-      'Normal' => (const Color(0xFFDCFCE7), const Color(0xFF15803D)),
-      'Overweight' => (const Color(0xFFFEF3C7), const Color(0xFFB45309)),
-      'Obese' => (const Color(0xFFFEE2E2), const Color(0xFFB91C1C)),
-      _ => (const Color(0xFFF1F5F9), const Color(0xFF64748B)),
-    };
+    final (bg, fg) = _inkOf(indicator);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       decoration: BoxDecoration(
@@ -2261,20 +2299,19 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
   }
 
   String _htmlStatStrip(List<BmiRecord> records, String group) {
-    int count(String c) => records.where((r) => r.indicator == c).length;
-    final all = <(String, int, String, String)>[
-      ('Total ${_groupTitle(group)}', records.length, '#F1F5F9', '#334155'),
-      ('Underweight', count('Underweight'), '#E0F2FE', '#0369A1'),
-      ('Normal', count('Normal'), '#DCFCE7', '#15803D'),
-      ('Overweight', count('Overweight'), '#FFF7ED', '#B45309'),
-      ('Obese', count('Obese'), '#FEE2E2', '#B91C1C'),
+    final counts = _countByIndicator(records);
+    // (label, count, background, text colour)
+    final all = <(String, int, int, int)>[
+      ('Total ${_groupTitle(group)}', records.length, 0xFFF1F5F9, 0xFF334155),
+      for (final c in _shownIndicators(counts))
+        (c, counts[c] ?? 0, _indicatorInk[c]!.$1, _indicatorInk[c]!.$2),
     ];
     final stats = _singleIndicator
         ? all.where((s) => s.$1 == _selectedClassification)
         : all;
     return '<div class="stats">${[
       for (final s in stats)
-        '<span class="chip" style="background:${s.$3};color:${s.$4}">'
+        '<span class="chip" style="background:${_hex(s.$3)};color:${_hex(s.$4)}">'
             '<b>${s.$2}</b>${_h(s.$1)}</span>'
     ].join()}</div>';
   }
@@ -2300,8 +2337,8 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
     for (final blk in _summaryBlocksFor(group, recs)) {
       b.write('<div class="sec">${_h(blk.title.toUpperCase())}</div>');
       b.write(_htmlTable(
-        headers:
-            _summaryHeaders(blk.first, withTotal: false, second: blk.second),
+        headers: _summaryHeaders(blk.first,
+            withTotal: false, second: blk.second, indicators: blk.indicators),
         rows: [for (final s in blk.rows) _blockCells(blk, s, withTotal: false)],
         labelCols: blk.second == null ? 1 : 2,
       ));
@@ -2335,9 +2372,9 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
 <style>
 .t.bmi th, .t.bmi td { text-align: center; }
 .t.dense th, .t.dense td { padding: 2px 4px; font-size: 8pt; line-height: 1.15; }
-.stats { display: flex; justify-content: center; gap: 6px; margin: 8px 0; }
-.chip { border-radius: 5px; padding: 4px 10px; font-size: 7.5pt; }
-.chip b { font-size: 12pt; margin-right: 5px; }
+.stats { display: flex; flex-wrap: nowrap; justify-content: center; gap: 4px; margin: 8px 0; }
+.chip { flex: 1 1 0; min-width: 0; max-width: 84pt; border-radius: 5px; padding: 4px 2px; text-align: center; font-size: 6.5pt; line-height: 1.15; }
+.chip b { display: block; font-size: 11pt; line-height: 1.2; margin: 0 0 1px; }
 .sec { font-size: 11pt; font-weight: bold; margin: 14px 0 6px; break-after: avoid; }
 </style>
 <div class="ttl">
@@ -2442,7 +2479,8 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
         _printSectionTitle(b.title.toUpperCase()),
         pw.SizedBox(height: 6),
         _printTable(
-          headers: _summaryHeaders(b.first, withTotal: false, second: b.second),
+          headers: _summaryHeaders(b.first,
+              withTotal: false, second: b.second, indicators: b.indicators),
           rows: [
             for (final s in b.rows) _blockCells(b, s, withTotal: false),
           ],
@@ -2591,73 +2629,61 @@ class _BmiRecordsScreenState extends State<BmiRecordsScreen>
   }
 
   pw.Widget _printStatStrip(List<BmiRecord> records, String group) {
-    int count(String c) => records.where((r) => r.indicator == c).length;
-    final allStats =
-        <({String label, int value, PdfColor tint, PdfColor ink})>[
+    final counts = _countByIndicator(records);
+    final all = <({String label, int value, PdfColor tint, PdfColor ink})>[
       (
         label: 'Total ${_groupTitle(group)}',
         value: records.length,
         tint: PdfColor.fromInt(0xFFF1F5F9),
         ink: PdfColor.fromInt(0xFF334155),
       ),
-      (
-        label: 'Underweight',
-        value: count('Underweight'),
-        tint: PdfColor.fromInt(0xFFE0F2FE),
-        ink: PdfColor.fromInt(0xFF0369A1),
-      ),
-      (
-        label: 'Normal',
-        value: count('Normal'),
-        tint: PdfColor.fromInt(0xFFDCFCE7),
-        ink: PdfColor.fromInt(0xFF15803D),
-      ),
-      (
-        label: 'Overweight',
-        value: count('Overweight'),
-        tint: PdfColor.fromInt(0xFFFFF7ED),
-        ink: PdfColor.fromInt(0xFFB45309),
-      ),
-      (
-        label: 'Obese',
-        value: count('Obese'),
-        tint: PdfColor.fromInt(0xFFFEE2E2),
-        ink: PdfColor.fromInt(0xFFB91C1C),
-      ),
+      for (final c in _shownIndicators(counts))
+        (
+          label: c,
+          value: counts[c] ?? 0,
+          tint: PdfColor.fromInt(_indicatorInk[c]!.$1),
+          ink: PdfColor.fromInt(_indicatorInk[c]!.$2),
+        ),
     ];
     // When one BMI indicator is selected, print only that indicator's count.
     final stats = _singleIndicator
-        ? allStats.where((s) => s.label == _selectedClassification).toList()
-        : allStats;
+        ? all.where((s) => s.label == _selectedClassification).toList()
+        : all;
+    // One row always: chip width shrinks as the number of chips grows
+    // (Letter portrait has ~552pt of usable width).
+    final n = stats.length;
+    final double chipW = n >= 9 ? 56 : (n == 8 ? 62 : (n == 7 ? 70 : 80));
     return pw.Row(
       mainAxisAlignment: pw.MainAxisAlignment.center,
       children: [
         for (final s in stats)
           pw.Padding(
-            padding: const pw.EdgeInsets.symmetric(horizontal: 3),
+            padding: const pw.EdgeInsets.symmetric(horizontal: 2),
             child: pw.Container(
-              padding:
-                  const pw.EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              width: chipW,
+              height: 32,
+              alignment: pw.Alignment.center,
+              padding: const pw.EdgeInsets.symmetric(horizontal: 2),
               decoration: pw.BoxDecoration(
                 color: s.tint,
                 borderRadius: pw.BorderRadius.circular(5),
               ),
-              child: pw.Row(
+              child: pw.Column(
                 mainAxisSize: pw.MainAxisSize.min,
-                crossAxisAlignment: pw.CrossAxisAlignment.center,
+                mainAxisAlignment: pw.MainAxisAlignment.center,
                 children: [
                   pw.Text(
                     '${s.value}',
                     style: pw.TextStyle(
-                      fontSize: 12,
+                      fontSize: 11,
                       fontWeight: pw.FontWeight.bold,
                       color: s.ink,
                     ),
                   ),
-                  pw.SizedBox(width: 5),
                   pw.Text(
                     s.label,
-                    style: pw.TextStyle(fontSize: 7.5, color: s.ink),
+                    textAlign: pw.TextAlign.center,
+                    style: pw.TextStyle(fontSize: 6.5, color: s.ink),
                   ),
                 ],
               ),

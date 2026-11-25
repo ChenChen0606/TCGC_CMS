@@ -4,10 +4,38 @@ import 'package:clinicmanagementsystem/features/vitals/models/vitals_bands.dart'
 
 // =============================================================================
 //  WHO BMI classification
-//    19 years and over  -> fixed WHO adult cut-offs
+//    19 years and over  -> fixed WHO adult cut-offs (7 labels, obese classes)
 //    5 to 18 years      -> WHO BMI-for-age z-score (LMS table at bottom)
+//                          (WHO defines only "Obese" for children, no classes)
 //    under 5 years      -> not covered, BMI is blocked
 // =============================================================================
+
+/// The only BMI labels the app uses (single source of truth).
+abstract final class BmiLabel {
+  static const severelyUnderweight = 'Severely Underweight';
+  static const underweight = 'Underweight';
+  static const normal = 'Normal';
+  static const overweight = 'Overweight';
+
+  /// Ages 5-18 only: WHO BMI-for-age has no obesity classes.
+  static const obese = 'Obese';
+
+  /// Adults 19+ only.
+  static const obeseI = 'Obese Class I';
+  static const obeseII = 'Obese Class II';
+  static const obeseIII = 'Obese Class III';
+
+  static const List<String> all = [
+    severelyUnderweight,
+    underweight,
+    normal,
+    overweight,
+    obese,
+    obeseI,
+    obeseII,
+    obeseIII,
+  ];
+}
 
 abstract final class WhoBmi {
   // ---------- helpers --------------------------------------------------------
@@ -73,13 +101,17 @@ abstract final class WhoBmi {
     // --- 19 years and over: WHO adult cut-offs (classify the number shown)
     if (months >= 228) {
       final b = (bmi * 10).round() / 10;
-      if (b < 16) return (label: 'Underweight', band: VitalBand.high); //Severe 
-      if (b < 18.5) return (label: 'Underweight', band: VitalBand.watch);
-      if (b < 25) return (label: 'Normal', band: VitalBand.normal);
-      if (b < 30) return (label: 'Overweight', band: VitalBand.watch);
-      if (b < 35) return (label: 'Obese', band: VitalBand.high); // Class I
-      if (b < 40) return (label: 'Obese', band: VitalBand.high); // Class II
-      return (label: 'Obese', band: VitalBand.critical); // Class III
+      if (b < 16) {
+        return (label: BmiLabel.severelyUnderweight, band: VitalBand.high);
+      }
+      if (b < 18.5) {
+        return (label: BmiLabel.underweight, band: VitalBand.watch);
+      }
+      if (b < 25) return (label: BmiLabel.normal, band: VitalBand.normal);
+      if (b < 30) return (label: BmiLabel.overweight, band: VitalBand.watch);
+      if (b < 35) return (label: BmiLabel.obeseI, band: VitalBand.high);
+      if (b < 40) return (label: BmiLabel.obeseII, band: VitalBand.high);
+      return (label: BmiLabel.obeseIII, band: VitalBand.critical);
     }
 
     // --- 5 to 18 years: WHO BMI-for-age z-score
@@ -87,11 +119,13 @@ abstract final class WhoBmi {
     final lms = kWhoBmiLms[key]?[months];
     if (lms == null) return null;
     final z = _zScore(bmi, lms);
-    if (z < -3) return (label: 'Underweight', band: VitalBand.high);
-    if (z < -2) return (label: 'Underweight', band: VitalBand.watch);
-    if (z <= 1) return (label: 'Normal', band: VitalBand.normal);
-    if (z <= 2) return (label: 'Overweight', band: VitalBand.watch);
-    return (label: 'Obese', band: VitalBand.high);
+    if (z < -3) {
+      return (label: BmiLabel.severelyUnderweight, band: VitalBand.high);
+    }
+    if (z < -2) return (label: BmiLabel.underweight, band: VitalBand.watch);
+    if (z <= 1) return (label: BmiLabel.normal, band: VitalBand.normal);
+    if (z <= 2) return (label: BmiLabel.overweight, band: VitalBand.watch);
+    return (label: BmiLabel.obese, band: VitalBand.high);
   }
 
   static double _zScore(double bmi, List<double> lms) {
